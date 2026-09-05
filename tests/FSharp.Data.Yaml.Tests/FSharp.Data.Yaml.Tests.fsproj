@@ -16,6 +16,7 @@
     <Compile Include="FlowTests.fs" />
     <Compile Include="BlockTests.fs" />
     <Compile Include="BlockScalarTests.fs" />
+    <Compile Include="AnchorTests.fs" />
     <Compile Include="PlaceholderTests.fs" />
   </ItemGroup>
 
