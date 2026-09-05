@@ -7,13 +7,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Additional files (YamlEmitter.fs, YamlExtensions.fs) are added here as their phases
-         land, per plans/yamlvalue-parser.md. -->
     <Compile Include="YamlValue.fs" />
     <Compile Include="YamlReader.fs" />
     <Compile Include="YamlScalar.fs" />
     <Compile Include="YamlParser.fs" />
     <Compile Include="YamlEmitter.fs" />
+    <Compile Include="YamlExtensions.fs" />
     <Compile Include="AssemblyInfo.fs" />
   </ItemGroup>
 
