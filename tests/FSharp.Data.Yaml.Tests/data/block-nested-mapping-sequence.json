@@ -1,0 +1,6 @@
+{
+  "services": {
+    "web": { "image": "nginx", "ports": [80, 443] },
+    "db": { "image": "postgres" }
+  }
+}

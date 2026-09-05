@@ -7,9 +7,31 @@ operator, read with `AsInteger()`-style accessors, and write back out — includ
 
 **Zero dependencies.** The parser is hand-written, so the package pulls in nothing but FSharp.Core.
 
-> **Status: in development.** The API below is the design being built to; see
-> [`plans/yamlvalue-parser.md`](plans/yamlvalue-parser.md) for the phased plan. Sections marked
-> _(planned)_ are not implemented yet.
+> **Status: feature-complete.** All phases of [`plans/yamlvalue-parser.md`](plans/yamlvalue-parser.md)
+> are implemented — flow and block parsing, all scalar types, block/multi-line scalars,
+> anchors/aliases/merge keys, multi-document streams and directives, comment capture via
+> `YamlDocument`, the emitter, and the `As*`/`?` extension API. Every example below runs against
+> the current implementation.
+
+## Supported features
+
+- **Flow and block YAML**, arbitrarily nested — `{...}`/`[...]` flow collections and indentation-based
+  block mappings/sequences, including compact notation (`- key: value`) and explicit `? key` / `: value`
+  pairs.
+- **All YAML core-schema scalar types** plus `Timestamp` — strings, integers (decimal/octal/hex),
+  floats (including `.inf`/`-.inf`/`.nan`), booleans, null, and ISO-8601 dates/date-times — with the
+  Norway problem (`yes`/`no`/`on`/`off`) deliberately left as strings.
+- **Block and multi-line scalars** — `|` literal and `>` folded styles, with `-`/`+` chomping and
+  explicit indent indicators.
+- **Anchors, aliases and merge keys** (`&anchor`, `*alias`, `<<: *anchor`), resolved during parsing
+  into a plain tree with shared (not copied) subtrees. Recursive anchors are a parse error.
+- **Multi-document streams** (`---`/`...`) and `%YAML`/`%TAG` directives, via `ParseMultiple` and
+  `YamlDocument`.
+- **Comment round-tripping** through the separate `YamlDocument` type, which pairs a `YamlValue`
+  with a path-keyed comment table — `YamlValue.Parse` itself stays comment-free.
+- **Round-tripping emission** — `ToString`/`WriteTo` in block or flow style, with quoting rules
+  that guarantee `Parse(v.ToString(YamlSaveOptions.None)) = v` (the property `RoundTripTests` checks
+  via FsCheck).
 
 ## Why
 
@@ -169,7 +191,7 @@ let config =
                                                         YamlValue.String "public" |]
     |]
 
-config.ToString()
+config.ToString(YamlSaveOptions.None)
 // name: web
 // port: 8080
 // tags:
@@ -180,10 +202,18 @@ config.ToString(YamlSaveOptions.Flow)
 // {name: web, port: 8080, tags: [http, public]}
 ```
 
-The emitter quotes any string that would otherwise read back as a different type — `"true"`,
-`"8080"`, `"null"`, `"2024-01-30"`, the empty string — so `Parse(v.ToString()) = v` always holds.
+> **A `ToString()` gotcha.** F#/.NET type extensions can't override the virtual `ToString()`
+> declared on the original type, so a genuinely bare `x.ToString()` call (no arguments at all)
+> resolves to the compiler-generated structural formatter from `[<StructuredFormatDisplay>]`
+> (handy in F# Interactive and debugger views: `{name: "web"; port: 8080}`), not the YAML emitter.
+> Pass an argument — `x.ToString(YamlSaveOptions.None)` or `x.ToString(2)` — to reliably reach the
+> real emitter. The same applies to `YamlDocument.ToString()`.
 
-### Comments _(planned)_
+The emitter quotes any string that would otherwise read back as a different type — `"true"`,
+`"8080"`, `"null"`, `"2024-01-30"`, the empty string — so
+`Parse(v.ToString(YamlSaveOptions.None)) = v` always holds.
+
+### Comments
 
 Comments are deliberately kept out of `YamlValue` so that pattern matching stays clean. When you
 need them, parse a `YamlDocument` instead — it pairs the value with a path-keyed comment table.
@@ -195,8 +225,8 @@ name: web     # the public name
 port: 8080
 """
 
-doc.Value?name.AsString()   // "web"
-doc.ToString()              // round-trips, comments and all
+doc.Value?name.AsString()                  // "web"
+doc.ToString(YamlSaveOptions.None)         // round-trips, comments and all
 ```
 
 `YamlValue.Parse` discards comments; `YamlDocument.Parse` preserves them.
@@ -218,7 +248,46 @@ doc.ToString()              // round-trips, comments and all
 
 Explicit tags (`!!str`, `!!int`, `!!bool`, …) override resolution.
 
+## `JsonValue` parity
+
+`YamlValue` is deliberately shaped like [`FSharp.Data.JsonValue`](https://fsprojects.github.io/FSharp.Data/library/JsonValue.html)
+— if you know one, you already mostly know the other. This table maps every `JsonValue` concept
+to its `YamlValue` equivalent, plus the YAML-only additions that don't have a `JsonValue`
+counterpart.
+
+| `JsonValue` | `YamlValue` | Note |
+|---|---|---|
+| `Parse(text)` | `Parse(text)` | Same name and shape. Comments are discarded; use `YamlDocument.Parse` to keep them. |
+| `TryParse(text)` | `TryParse(text)` | Same name and shape. |
+| — | `ParseMultiple(text)` | YAML-only: splits a `---`-separated multi-document stream. |
+| `Load(stream \| reader \| uri)` | `Load(stream \| reader \| uri)` | Same name and shape. |
+| `AsyncLoad(uri)` | `AsyncLoad(uri)` | Same name and shape. |
+| `Request` / `RequestAsync` | — | Omitted; would require an HTTP dependency. |
+| `String of string` | `String of string` | Same. |
+| `Number of decimal` | `Number of decimal` | Same. |
+| `Float of float` | `Float of float` | Same; also used for `.inf`/`-.inf`/`.nan`. |
+| `Boolean of bool` | `Boolean of bool` | Same, but core-schema only — `yes`/`no`/`on`/`off` stay strings. |
+| `Null` | `Null` | Same. |
+| `Record of (string * JsonValue)[]` | `Mapping of (YamlValue * YamlValue)[]` | YAML permits non-string keys, so `Mapping` keys are `YamlValue`, not `string`. |
+| `Array of JsonValue[]` | `Sequence of YamlValue[]` | YAML's term for the same shape. |
+| — | `Timestamp of DateTimeOffset` | YAML-only: a native scalar type for ISO-8601 dates/date-times. |
+| `( ? )` operator | `( ? )` operator | Same — `value?propertyName`, string-keyed only. |
+| `AsBoolean`, `AsInteger`, `AsInteger64`, `AsDecimal`, `AsFloat`, `AsString`, `AsDateTime`, `AsGuid` | Same names | Identical signatures, including the `?cultureInfo` parameter. |
+| `AsArray` | `AsArray` (alias `AsSequence`) | `AsSequence` is a YAML-flavoured alias for the same accessor. |
+| `Properties` | `Properties` | String-keyed pairs only, same as `JsonValue`. |
+| — | `Entries` | YAML-only: every mapping pair, including non-string keys. |
+| `GetProperty`, `TryGetProperty` | Same names | Same signatures. |
+| `InnerText` | `InnerText` | Same. |
+| `ToString(?saveOptions)` | `ToString(saveOptions, ?indentationSpaces)` / `ToString(?indentationSpaces)` | Same idea; YAML adds an indentation parameter. See the `ToString()` gotcha above. |
+| `WriteTo(writer, saveOptions)` | `WriteTo(writer, saveOptions, ?indentationSpaces)` | Same idea. |
+| `JsonSaveOptions` | `YamlSaveOptions` | Adds `Flow` (JSON-style output) and `ExplicitDocumentMarkers` (`---`/`...`) to `JsonValue`'s formatting flags. |
+| — | `YamlDocument` | YAML-only: pairs a `YamlValue` with comments, directives and multi-document support that `JsonValue` has no equivalent for. |
+| — | Anchors / aliases (`&anchor`, `*alias`) | YAML-only: resolved during parsing into a shared (not copied) immutable tree. |
+| — | Merge keys (`<<: *anchor`) | YAML-only: on by default. |
+
 ## Differences from `JsonValue`
+
+The same information as above, condensed to the parts that actually differ:
 
 | `JsonValue` | `YamlValue` | Note |
 |---|---|---|
@@ -227,7 +296,7 @@ Explicit tags (`!!str`, `!!int`, `!!bool`, …) override resolution.
 | — | `Timestamp of DateTimeOffset` | native YAML scalar type |
 | `JsonSaveOptions` | `YamlSaveOptions` | block vs. flow style, comment suppression |
 | `Request` / `RequestAsync` | — | omitted; would require an HTTP dependency |
-| — | `YamlDocument` | comments, directives, multi-document streams |
+| — | `YamlDocument` | comments, directives, multi-document streams, anchors/aliases, merge keys |
 
 Everything else — `Parse`, `TryParse`, `ParseMultiple`, `Load`, `AsyncLoad`, `WriteTo`, the `?`
 operator and the whole `As*` accessor family — matches `JsonValue` name for name.

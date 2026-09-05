@@ -1,0 +1,5 @@
+kind: Service
+name: web
+---
+kind: Deployment
+name: web

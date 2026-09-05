@@ -1,0 +1,6 @@
+defaults: &defaults
+  restart: always
+  logging: json-file
+web:
+  <<: *defaults
+  image: nginx

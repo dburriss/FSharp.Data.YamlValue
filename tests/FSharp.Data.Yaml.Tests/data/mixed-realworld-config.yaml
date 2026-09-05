@@ -1,0 +1,7 @@
+{
+  "app": "myservice",
+  "replicas": 3,
+  "env": ["prod", "staging"],
+  "resources": {"cpu": "500m", "memory": "512Mi"},
+  "debug": false
+}
