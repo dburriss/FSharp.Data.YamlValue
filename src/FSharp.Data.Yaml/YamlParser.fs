@@ -96,8 +96,86 @@ module internal YamlParser =
                 contentEnd <- cur.Offset
         cur.Source.Substring(start.Offset, contentEnd - start.Offset)
 
+    /// Folds one maximal run of segments (raw text between the unescaped breaks that bound the
+    /// run) per the quoted-scalar line-folding rule: leading whitespace is stripped from every
+    /// segment except the first, trailing whitespace from every segment except the last (the
+    /// first/last segments sit at a run boundary — either the scalar's own edge or an escaped
+    /// break — and must be left untouched there), then a run of `k` blank (now-empty) segments
+    /// folds to a single space when `k = 0` or `k` line breaks when `k >= 1`.
+    let private foldRun (segs: ResizeArray<string>) : string =
+        let n = segs.Count
+        let sb = StringBuilder()
+        let mutable pendingBlanks = 0
+        let mutable started = false
+        for idx in 0 .. n - 1 do
+            let s0 = segs.[idx]
+            let s1 = if idx > 0 then s0.TrimStart(' ', '\t') else s0
+            let s = if idx < n - 1 then s1.TrimEnd(' ', '\t') else s1
+            if s = "" then
+                pendingBlanks <- pendingBlanks + 1
+            else
+                if pendingBlanks > 0 then
+                    sb.Append(String.replicate pendingBlanks "\n") |> ignore
+                elif started then
+                    sb.Append(' ') |> ignore
+                sb.Append(s) |> ignore
+                started <- true
+                pendingBlanks <- 0
+        if pendingBlanks > 0 then
+            sb.Append(String.replicate pendingBlanks "\n") |> ignore
+        sb.ToString()
+
+    /// Line-folds the raw (pre-unescape) content of a multi-line quoted scalar per YAML's quoted-
+    /// scalar folding rule (see `foldRun`). For double-quoted scalars, a line break immediately
+    /// preceded by an odd number of backslashes is a `\`-escaped line continuation — handled
+    /// entirely by `YamlScalar.unescapeDoubleQuoted` — and is passed through here completely
+    /// untouched (including the following line's leading whitespace) so that handling is not
+    /// double-processed; folding resumes as a fresh run on both sides of it.
+    let private foldQuotedRaw (raw: string) (isDouble: bool) : string =
+        let len = raw.Length
+        let segments = ResizeArray<string>()
+        let breakTexts = ResizeArray<string>()
+        let escaped = ResizeArray<bool>()
+        let mutable segStart = 0
+        let mutable i = 0
+        let addBreak (breakEnd: int) (brk: string) =
+            let seg = raw.Substring(segStart, i - segStart)
+            segments.Add(seg)
+            breakTexts.Add(brk)
+            let mutable bs = 0
+            let mutable k = seg.Length - 1
+            while k >= 0 && seg.[k] = '\\' do
+                bs <- bs + 1
+                k <- k - 1
+            escaped.Add(isDouble && bs % 2 = 1)
+            i <- breakEnd
+            segStart <- i
+        while i < len do
+            match raw.[i] with
+            | '\r' ->
+                let brk = if i + 1 < len && raw.[i + 1] = '\n' then "\r\n" else "\r"
+                addBreak (i + brk.Length) brk
+            | '\n' -> addBreak (i + 1) "\n"
+            | _ -> i <- i + 1
+        segments.Add(raw.Substring(segStart, len - segStart))
+        if breakTexts.Count = 0 then
+            raw
+        else
+            let sb = StringBuilder()
+            let mutable runSegments = ResizeArray<string>()
+            runSegments.Add(segments.[0])
+            for bIdx in 0 .. breakTexts.Count - 1 do
+                if escaped.[bIdx] then
+                    sb.Append(foldRun runSegments) |> ignore
+                    sb.Append(breakTexts.[bIdx]) |> ignore
+                    runSegments <- ResizeArray<string>()
+                runSegments.Add(segments.[bIdx + 1])
+            sb.Append(foldRun runSegments) |> ignore
+            sb.ToString()
+
     /// Parses a single-quoted flow scalar, cursor positioned at the opening `'`. Always yields
-    /// `YamlValue.String` — no scalar resolution applies to quoted scalars.
+    /// `YamlValue.String` — no scalar resolution applies to quoted scalars. Multi-line content is
+    /// line-folded (see `foldQuotedRaw`) before the single-quote unescape (`''` → `'`) is applied.
     let private parseSingleQuoted (cur: Cursor) : YamlValue =
         let startPos = cur.Position
         cur.Advance() // opening '
@@ -117,7 +195,8 @@ module internal YamlParser =
                     closed <- true
             | Some _ -> cur.Advance()
         let raw = cur.Source.Substring(contentStart, endOffset - contentStart)
-        YamlValue.String(YamlScalar.unescapeSingleQuoted raw)
+        let folded = if raw.IndexOfAny([| '\n'; '\r' |]) >= 0 then foldQuotedRaw raw false else raw
+        YamlValue.String(YamlScalar.unescapeSingleQuoted folded)
 
     /// Strips the ` at line L, column C\n<snippet>` suffix that `YamlParseException`'s
     /// constructor appends, recovering the original message passed to `YamlReader.Cursor.Error`
@@ -151,8 +230,9 @@ module internal YamlParser =
                 closed <- true
             | Some _ -> cur.Advance()
         let raw = cur.Source.Substring(contentStart, endOffset - contentStart)
+        let folded = if raw.IndexOfAny([| '\n'; '\r' |]) >= 0 then foldQuotedRaw raw true else raw
         try
-            YamlValue.String(YamlScalar.unescapeDoubleQuoted raw)
+            YamlValue.String(YamlScalar.unescapeDoubleQuoted folded)
         with :? YamlParseException as ex ->
             // ex.Line/ex.Column are 1-based, relative to `raw` alone. Translate onto the
             // document: line 1 of `raw` continues on `contentPos`'s line; later lines of `raw`
@@ -336,6 +416,35 @@ module internal YamlParser =
                 | _ -> false)
         | _ -> false
 
+    /// Like `skipBlankLines`, but counts the blank/comment-only lines skipped — used by
+    /// multi-line plain-scalar folding to know how many line breaks a gap between two content
+    /// lines represents. Leaves the cursor positioned at the start of a line with real content, at
+    /// EOF, or (like `skipBlankLines`) at an illegal indentation tab for the caller to discover.
+    let private countAndSkipBlankLines (cur: Cursor) : int =
+        let mutable count = 0
+        let mutable moved = true
+        while moved do
+            moved <- false
+            let lineStart = cur.Position
+            let spaces, tabError = cur.CountIndent()
+            match tabError with
+            | Some _ -> ()
+            | None ->
+                cur.Advance(spaces)
+                match cur.Peek() with
+                | None -> ()
+                | Some '#' when isCommentStart cur ->
+                    cur.SkipComment() |> ignore
+                    cur.SkipLineBreak() |> ignore
+                    count <- count + 1
+                    moved <- true
+                | Some ('\n' | '\r') ->
+                    cur.SkipLineBreak() |> ignore
+                    count <- count + 1
+                    moved <- true
+                | Some _ -> cur.Seek(lineStart)
+        count
+
     /// True when the cursor is at a `-` that acts as a block-sequence entry indicator, i.e. it is
     /// followed by whitespace, a line break, or EOF — not e.g. the `-` of a negative number like
     /// `-1`.
@@ -466,11 +575,216 @@ module internal YamlParser =
         | Some '"' -> parseDoubleQuoted cur
         | _ -> YamlScalar.resolvePlainScalar ((scanBlockPlainScalar cur).Trim())
 
+    /// Scans a plain scalar in block context across as many physical lines as continue it, per
+    /// the same line-folding rule used elsewhere (`foldRun`): a continuation line must be
+    /// indented strictly more than `parentIndent` (the enclosing mapping/sequence's own indent —
+    /// not the scalar's own starting column, so the common `key: this is\n  folded` shape, where
+    /// the continuation is indented less than where "this" started, is legal). The scalar ends at
+    /// EOF, at a line at or below `parentIndent`, or — even when more indented — at a line that
+    /// looks like the start of a new block construct (a mapping entry, a `-` sequence entry, or a
+    /// `?` explicit key): such a line is never swallowed as continuation text, since it can never
+    /// be valid content mid-scalar; leaving it alone lets the enclosing collection's own
+    /// indentation check raise its usual "inconsistent indentation" error for it. A blank line
+    /// between two content lines is folded per line-break count exactly as `foldRun` does (0
+    /// blanks → space, k blanks → k newlines). The final folded text is what the caller passes to
+    /// `resolvePlainScalar` — scalar resolution runs on the whole folded string, not per physical
+    /// line.
+    let private scanBlockPlainScalarMultiLine (cur: Cursor) (parentIndent: int) : string =
+        let sb = StringBuilder()
+        sb.Append((scanBlockPlainScalar cur).Trim()) |> ignore
+        let mutable continueLoop = true
+        while continueLoop do
+            if not (cur.IsLineBreak()) then
+                continueLoop <- false
+            else
+                let saved = cur.Position
+                cur.SkipLineBreak() |> ignore
+                let blanks = countAndSkipBlankLines cur
+                if cur.IsEof then
+                    cur.Seek(saved)
+                    continueLoop <- false
+                else
+                    let curIndent, tabError = cur.CountIndent()
+                    match tabError with
+                    | Some off -> raise (tabIndentError cur off)
+                    | None -> ()
+                    if curIndent <= parentIndent then
+                        cur.Seek(saved)
+                        continueLoop <- false
+                    else
+                        cur.Advance(curIndent)
+                        if isDashIndicator cur || isExplicitKeyIndicator cur || looksLikeMappingEntry cur then
+                            cur.Seek(saved)
+                            continueLoop <- false
+                        else
+                            let lineText = (scanBlockPlainScalar cur).Trim()
+                            if blanks = 0 then sb.Append(' ') |> ignore
+                            else sb.Append(String.replicate blanks "\n") |> ignore
+                            sb.Append(lineText) |> ignore
+        sb.ToString()
+
+    // -----------------------------------------------------------------------
+    // `|` literal and `>` folded block scalars (Phase 5)
+    // -----------------------------------------------------------------------
+
+    /// Chomping mode from a block scalar header's optional `-`/`+` indicator.
+    type private Chomp =
+        | Clip
+        | Strip
+        | Keep
+
+    /// Joins `core` (the block scalar's content lines with any trailing blank lines already
+    /// excluded — see `parseBlockScalar`) literally: each line as-is (indentation already
+    /// stripped to the block's content indent), a blank line contributing an empty line, no
+    /// folding of any kind. This is the `|` style.
+    let private buildLiteralBody (core: string option list) : string =
+        core |> List.map (function None -> "" | Some s -> s) |> String.concat "\n"
+
+    /// Joins `core` per the `>` folded-scalar rule: a single line break between two content lines
+    /// that are both at the block's own content indent (not "more-indented") folds to a space; a
+    /// run of `k` blank lines folds to `k` newlines; and — the "more-indented lines aren't
+    /// folded" exception (YAML 1.2 §8.1.3) — any line break adjacent to a line indented deeper
+    /// than the content indent (recognisable here as a stripped line whose text still starts with
+    /// a space or tab) is kept as a literal newline instead of being folded to a space, even when
+    /// there are zero intervening blank lines.
+    let private buildFoldedBody (core: string option list) : string =
+        let isMoreIndented (s: string) = s.Length > 0 && (s.[0] = ' ' || s.[0] = '\t')
+        let sb = StringBuilder()
+        let mutable pendingBlanks = 0
+        let mutable prevKind: bool option = None // Some true = more-indented, Some false = plain
+        for item in core do
+            match item with
+            | None -> pendingBlanks <- pendingBlanks + 1
+            | Some s ->
+                let moreIndented = isMoreIndented s
+                if pendingBlanks > 0 then
+                    sb.Append(String.replicate pendingBlanks "\n") |> ignore
+                    if prevKind = Some true || moreIndented then
+                        sb.Append('\n') |> ignore
+                elif prevKind.IsSome then
+                    if prevKind = Some false && not moreIndented then sb.Append(' ') |> ignore
+                    else sb.Append('\n') |> ignore
+                sb.Append(s) |> ignore
+                prevKind <- Some moreIndented
+                pendingBlanks <- 0
+        sb.ToString()
+
+    /// Parses a `|` literal or `>` folded block scalar, cursor positioned at the `|`/`>` itself.
+    /// `parentIndent` is the enclosing entry's own indent (the dash's column for a sequence entry,
+    /// the mapping's indent for a mapping value, or `-1` at the document root) — content lines
+    /// must be indented strictly more than this. Always yields `YamlValue.String`; no scalar
+    /// resolution ever applies to block scalars.
+    ///
+    /// Header grammar: `|`/`>` optionally followed by a chomping indicator (`-`/`+`) and/or an
+    /// explicit indentation indicator (a digit `1`-`9`), in *either* order (`|2-` and `|-2` are
+    /// both accepted, matching the YAML 1.2 grammar's `c-b-block-header`), then optional blanks
+    /// and an optional trailing comment.
+    ///
+    /// Indentation: with an explicit indicator, content indent = `parentIndent + digit`.
+    /// Otherwise it is auto-detected from the first non-empty content line — leading blank lines
+    /// are skipped over (and do not influence detection) — which is a deliberately lenient
+    /// reading of the spec's requirement for an explicit indicator whenever the first line would
+    /// otherwise be ambiguous (e.g. it starts with a blank line): auto-detecting from the first
+    /// non-empty line is what most implementations do in practice and avoids a spurious error for
+    /// the common case.
+    ///
+    /// Chomping: `-` (strip) drops the final line break entirely; `+` (keep) preserves every
+    /// trailing line break/blank line; the default (clip) keeps exactly one trailing line break
+    /// and drops any further trailing blank lines.
+    let private parseBlockScalar (cur: Cursor) (parentIndent: int) : YamlValue =
+        let isFolded = cur.Peek() = Some '>'
+        cur.Advance() // consume '|' or '>'
+        let mutable chomp = Clip
+        let mutable explicitIndent: int option = None
+        let mutable seenChomp = false
+        let mutable seenIndent = false
+        let mutable moreHeader = true
+        while moreHeader do
+            match cur.Peek() with
+            | Some '-' when not seenChomp ->
+                chomp <- Strip
+                seenChomp <- true
+                cur.Advance()
+            | Some '+' when not seenChomp ->
+                chomp <- Keep
+                seenChomp <- true
+                cur.Advance()
+            | Some c when System.Char.IsDigit c && c <> '0' && not seenIndent ->
+                explicitIndent <- Some(int c - int '0')
+                seenIndent <- true
+                cur.Advance()
+            | _ -> moreHeader <- false
+        cur.SkipBlanks() |> ignore
+        (match cur.Peek() with
+         | None
+         | Some ('\n' | '\r') -> ()
+         | Some '#' when isCommentStart cur -> cur.SkipComment() |> ignore
+         | Some c -> raise (cur.Error(sprintf "Invalid character '%c' in block scalar header" c)))
+        cur.SkipLineBreak() |> ignore
+
+        let lines = ResizeArray<string option>()
+        let mutable contentIndent =
+            match explicitIndent with
+            | Some n -> parentIndent + n
+            | None -> -1
+        let mutable terminated = false
+        while not terminated && not cur.IsEof do
+            let lineStart = cur.Position
+            let spaces, tabError = cur.CountIndent()
+            match tabError with
+            | Some off when contentIndent < 0 || spaces < contentIndent -> raise (tabIndentError cur off)
+            | _ -> ()
+            cur.Advance(spaces)
+            match cur.Peek() with
+            | None -> lines.Add(None)
+            | Some ('\n' | '\r') ->
+                cur.SkipLineBreak() |> ignore
+                lines.Add(None)
+            | Some _ ->
+                if contentIndent < 0 && spaces <= parentIndent then
+                    cur.Seek(lineStart)
+                    terminated <- true
+                else
+                    if contentIndent < 0 then
+                        contentIndent <- spaces
+                    if spaces < contentIndent then
+                        cur.Seek(lineStart)
+                        terminated <- true
+                    else
+                        let extra = spaces - contentIndent
+                        let restStart = cur.Offset
+                        while not (cur.IsEndOfLine()) do
+                            cur.Advance()
+                        let rest = cur.Source.Substring(restStart, cur.Offset - restStart)
+                        lines.Add(Some(System.String(' ', extra) + rest))
+                        cur.SkipLineBreak() |> ignore
+        let total = lines.Count
+        let lastContentIdx =
+            let mutable idx = -1
+            for i in 0 .. total - 1 do
+                if lines.[i].IsSome then idx <- i
+            idx
+        let core = if lastContentIdx >= 0 then [ for i in 0 .. lastContentIdx -> lines.[i] ] else []
+        let trailingBlankCount = if lastContentIdx >= 0 then total - 1 - lastContentIdx else total
+        let body0 = if isFolded then buildFoldedBody core else buildLiteralBody core
+        let final =
+            match chomp with
+            | Strip -> body0
+            | Clip -> body0 + (if total > 0 then "\n" else "")
+            | Keep ->
+                let extra = if lastContentIdx >= 0 then 1 else 0
+                body0 + String.replicate (trailingBlankCount + extra) "\n"
+        YamlValue.String final
+
     /// Parses one node — block sequence, block mapping, flow node, or plain/quoted scalar —
     /// starting at the cursor's current position, which must already be exactly at the node's
     /// first content column. `indent` is that column (0-based, i.e. the count of spaces before
     /// it), used as the sibling indent if this node turns out to be a block collection.
-    let rec private parseNodeAt (cur: Cursor) (indent: int) : YamlValue =
+    /// `parentIndent` is the enclosing entry's own indent, used only to bound multi-line plain-
+    /// scalar continuation (see `scanBlockPlainScalarMultiLine`) — it is unrelated to `indent`
+    /// whenever this node is reached inline after a marker (`indent` is then the marker's
+    /// content column, which can be well past `parentIndent`).
+    let rec private parseNodeAt (cur: Cursor) (indent: int) (parentIndent: int) : YamlValue =
         match cur.Peek() with
         | Some '-' when isDashIndicator cur -> parseBlockSequence cur indent
         | Some '?' when isExplicitKeyIndicator cur -> parseBlockMapping cur indent
@@ -485,8 +799,8 @@ module internal YamlParser =
             if looksLikeMappingEntry cur then
                 parseBlockMapping cur indent
             else
-                let text = scanBlockPlainScalar cur
-                YamlScalar.resolvePlainScalar (text.Trim())
+                let text = scanBlockPlainScalarMultiLine cur parentIndent
+                YamlScalar.resolvePlainScalar text
         | None -> YamlValue.Null
 
     /// Parses the value that follows a `-`, `:`, or `?` marker. `blockIndent` is the *marker's
@@ -503,9 +817,10 @@ module internal YamlParser =
         | None -> YamlValue.Null
         | Some ('\n' | '\r') -> parseIndentedValue cur blockIndent
         | Some '#' when isCommentStart cur -> parseIndentedValue cur blockIndent
+        | Some ('|' | '>') -> parseBlockScalar cur blockIndent
         | Some _ ->
             let inlineIndent = cur.Column - 1
-            parseNodeAt cur inlineIndent
+            parseNodeAt cur inlineIndent blockIndent
 
     /// Looks for a value on a subsequent, more-indented line (the "key:\n  value" / "-\n  value"
     /// shape). `parentIndent` is the enclosing entry's own indent; a following content line is
@@ -528,7 +843,9 @@ module internal YamlParser =
                 YamlValue.Null
             else
                 cur.Advance(curIndent)
-                parseNodeAt cur curIndent
+                match cur.Peek() with
+                | Some ('|' | '>') -> parseBlockScalar cur parentIndent
+                | _ -> parseNodeAt cur curIndent parentIndent
 
     /// Parses a block sequence — `- item` entries sharing the indent `indent` (the column of
     /// each `-`) — with the cursor already positioned at the first `-`. Arbitrary nesting and
@@ -676,7 +993,10 @@ module internal YamlParser =
             | Some off -> raise (tabIndentError cur off)
             | None -> ()
             cur.Advance(curIndent)
-            let value = parseNodeAt cur curIndent
+            let value =
+                match cur.Peek() with
+                | Some ('|' | '>') -> parseBlockScalar cur -1
+                | _ -> parseNodeAt cur curIndent -1
             skipBlankLines cur
             if not cur.IsEof then
                 raise (cur.Error "Unexpected content after document")
