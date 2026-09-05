@@ -7,10 +7,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Additional test files (ScalarTests.fs, FlowTests.fs, BlockTests.fs, BlockScalarTests.fs,
+    <!-- Additional test files (FlowTests.fs, BlockTests.fs, BlockScalarTests.fs,
          AnchorTests.fs, DocumentTests.fs, CommentTests.fs, EmitterTests.fs, RoundTripTests.fs,
          ConformanceTests.fs) are added here as their phases land, per plans/yamlvalue-parser.md. -->
     <Compile Include="YamlValueTests.fs" />
+    <Compile Include="YamlReaderTests.fs" />
+    <Compile Include="ScalarTests.fs" />
     <Compile Include="PlaceholderTests.fs" />
   </ItemGroup>
 
