@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <IsPackable>true</IsPackable>
+    <Description>An FSharp.Data-style, dependency-free YAML document API: a discriminated union DU you can pattern match, Parse/Load, a `?` dynamic operator and AsInteger()-style accessors.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Additional files (YamlReader.fs, YamlScalar.fs, YamlParser.fs, YamlEmitter.fs,
+         YamlExtensions.fs) are added here as their phases land, per plans/yamlvalue-parser.md. -->
+    <Compile Include="YamlValue.fs" />
+  </ItemGroup>
+
+</Project>

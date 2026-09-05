@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);NU1701</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Additional test files (ScalarTests.fs, FlowTests.fs, BlockTests.fs, BlockScalarTests.fs,
+         AnchorTests.fs, DocumentTests.fs, CommentTests.fs, EmitterTests.fs, RoundTripTests.fs,
+         ConformanceTests.fs) are added here as their phases land, per plans/yamlvalue-parser.md. -->
+    <Compile Include="PlaceholderTests.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FsCheck.Xunit" Version="2.16.6" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/FSharp.Data.Yaml/FSharp.Data.Yaml.fsproj" />
+  </ItemGroup>
+
+</Project>
