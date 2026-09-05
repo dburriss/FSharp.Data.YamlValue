@@ -19,6 +19,8 @@
     <Compile Include="AnchorTests.fs" />
     <Compile Include="DocumentTests.fs" />
     <Compile Include="CommentTests.fs" />
+    <Compile Include="EmitterTests.fs" />
+    <Compile Include="RoundTripTests.fs" />
     <Compile Include="PlaceholderTests.fs" />
   </ItemGroup>
 

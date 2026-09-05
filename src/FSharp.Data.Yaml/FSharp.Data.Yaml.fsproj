@@ -13,6 +13,7 @@
     <Compile Include="YamlReader.fs" />
     <Compile Include="YamlScalar.fs" />
     <Compile Include="YamlParser.fs" />
+    <Compile Include="YamlEmitter.fs" />
     <Compile Include="AssemblyInfo.fs" />
   </ItemGroup>
 
