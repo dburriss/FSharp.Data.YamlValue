@@ -1,5 +1,6 @@
 namespace FSharp.Data
 
+open System.IO
 open System.Text
 open System.Collections.Generic
 
@@ -616,6 +617,31 @@ module internal YamlParser =
     let private tabIndentError (cur: Cursor) (off: int) : YamlParseException =
         cur.ErrorAt("Tab characters are not allowed in indentation", cur.Line, cur.Column + off)
 
+    /// True when the cursor is positioned (at column 1) at the start of a `---`/`...` document
+    /// marker line — i.e. exactly `marker` followed by whitespace, a genuine comment, a line
+    /// break, or EOF (never a marker embedded in a longer token like `----` or `...abc`).
+    /// Document markers are reserved at column 1 only — a `---`/`...` appearing anywhere else
+    /// (inline after a mapping key, indented inside a block scalar, etc.) is ordinary content.
+    let private matchesDocMarker (cur: Cursor) (marker: string) : bool =
+        cur.Matches(marker)
+        && (match cur.PeekAt(marker.Length) with
+            | None -> true
+            | Some (' ' | '\t' | '\n' | '\r' | '#') -> true
+            | _ -> false)
+
+    /// True at a `---` document-start marker, cursor at column 1.
+    let private isDocumentStartMarkerAt (cur: Cursor) : bool =
+        cur.Column = 1 && matchesDocMarker cur "---"
+
+    /// True at a `...` document-end marker, cursor at column 1.
+    let private isDocumentEndMarkerAt (cur: Cursor) : bool =
+        cur.Column = 1 && matchesDocMarker cur "..."
+
+    /// True at either document marker — used everywhere a block construct must stop rather than
+    /// swallow the next document's boundary as more of its own content.
+    let private isAnyDocMarkerAt (cur: Cursor) : bool =
+        isDocumentStartMarkerAt cur || isDocumentEndMarkerAt cur
+
     /// True when the char at the cursor is `#` and is a genuine comment start (preceded by
     /// whitespace, or at column 1) — as opposed to a `#` embedded directly in a plain scalar.
     let private isCommentStart (cur: Cursor) : bool =
@@ -819,7 +845,7 @@ module internal YamlParser =
                     match tabError with
                     | Some off -> raise (tabIndentError cur off)
                     | None -> ()
-                    if curIndent <= parentIndent then
+                    if curIndent <= parentIndent || isAnyDocMarkerAt cur then
                         cur.Seek(saved)
                         continueLoop <- false
                     else
@@ -945,30 +971,34 @@ module internal YamlParser =
             match tabError with
             | Some off when contentIndent < 0 || spaces < contentIndent -> raise (tabIndentError cur off)
             | _ -> ()
-            cur.Advance(spaces)
-            match cur.Peek() with
-            | None -> lines.Add(None)
-            | Some ('\n' | '\r') ->
-                cur.SkipLineBreak() |> ignore
-                lines.Add(None)
-            | Some _ ->
-                if contentIndent < 0 && spaces <= parentIndent then
-                    cur.Seek(lineStart)
-                    terminated <- true
-                else
-                    if contentIndent < 0 then
-                        contentIndent <- spaces
-                    if spaces < contentIndent then
+            if spaces = 0 && isAnyDocMarkerAt cur then
+                cur.Seek(lineStart)
+                terminated <- true
+            else
+                cur.Advance(spaces)
+                match cur.Peek() with
+                | None -> lines.Add(None)
+                | Some ('\n' | '\r') ->
+                    cur.SkipLineBreak() |> ignore
+                    lines.Add(None)
+                | Some _ ->
+                    if contentIndent < 0 && spaces <= parentIndent then
                         cur.Seek(lineStart)
                         terminated <- true
                     else
-                        let extra = spaces - contentIndent
-                        let restStart = cur.Offset
-                        while not (cur.IsEndOfLine()) do
-                            cur.Advance()
-                        let rest = cur.Source.Substring(restStart, cur.Offset - restStart)
-                        lines.Add(Some(System.String(' ', extra) + rest))
-                        cur.SkipLineBreak() |> ignore
+                        if contentIndent < 0 then
+                            contentIndent <- spaces
+                        if spaces < contentIndent then
+                            cur.Seek(lineStart)
+                            terminated <- true
+                        else
+                            let extra = spaces - contentIndent
+                            let restStart = cur.Offset
+                            while not (cur.IsEndOfLine()) do
+                                cur.Advance()
+                            let rest = cur.Source.Substring(restStart, cur.Offset - restStart)
+                            lines.Add(Some(System.String(' ', extra) + rest))
+                            cur.SkipLineBreak() |> ignore
         let total = lines.Count
         let lastContentIdx =
             let mutable idx = -1
@@ -1106,7 +1136,7 @@ module internal YamlParser =
             match tabError with
             | Some off -> raise (tabIndentError cur off)
             | None -> ()
-            if curIndent <= parentIndent then
+            if curIndent <= parentIndent || isAnyDocMarkerAt cur then
                 cur.Seek(saved)
                 match tagOpt with
                 | Some tag -> applyCoreTag cur tag ""
@@ -1132,7 +1162,7 @@ module internal YamlParser =
                     true
                 else
                     skipBlankLines cur
-                    if cur.IsEof then
+                    if cur.IsEof || isAnyDocMarkerAt cur then
                         false
                     else
                         let curIndent, tabError = cur.CountIndent()
@@ -1180,7 +1210,7 @@ module internal YamlParser =
                     true
                 else
                     skipBlankLines cur
-                    if cur.IsEof then
+                    if cur.IsEof || isAnyDocMarkerAt cur then
                         false
                     else
                         let curIndent, tabError = cur.CountIndent()
@@ -1247,36 +1277,211 @@ module internal YamlParser =
         let finalItems = if state.MergeKeysEnabled then applyMergeKeys items else items.ToArray()
         YamlValue.Mapping finalItems
 
-    /// Parses a whole document — the Phase 4 entry point. Tries block-style parsing first (real
-    /// YAML is overwhelmingly block-style); a flow node, quoted scalar, or bare plain scalar as
-    /// the entire document falls out of `parseNodeAt` naturally, matching the Phase 3 behaviour
-    /// exactly for those shapes. Leading/trailing blank lines and comments are skipped; an empty
-    /// (all-whitespace/comment) document resolves to `YamlValue.Null`. Trailing content after the
-    /// node (other than whitespace/comments) is a parse error — full multi-document handling
-    /// arrives in Phase 7.
+    // -----------------------------------------------------------------------
+    // Documents & directives (Phase 7) — `---`/`...` markers, `%YAML`/`%TAG` directives, and
+    // `---`-separated multi-document streams.
+    // -----------------------------------------------------------------------
+
+    /// Parses one `%directive` line, cursor positioned at the leading `%` (column 1, guaranteed
+    /// by the only caller, `parseDirectivesAndMarker`). Consumes through and including the line's
+    /// trailing line break (or EOF) and returns `(name, value)` — `value` is the raw text after
+    /// the name, blanks-trimmed, comment and line ending excluded.
     ///
-    /// `disableMergeKeys` turns off `<<: *base` merge-key expansion for this parse (on by default
-    /// — see `YamlValueParsing.Parse`).
-    let parseDocument (text: string) (disableMergeKeys: bool) : YamlValue =
-        let cur = Cursor(text)
-        let state = ParseState(not disableMergeKeys)
+    /// Validates the two directives the plan calls out by name: `%YAML` must be `MAJOR.MINOR`
+    /// (e.g. `1.2`); `%TAG` must be `<handle> <prefix>` where `handle` is `!`, `!!`, or
+    /// `!word!`. Both are recorded verbatim (not reinterpreted — see the module doc comment for
+    /// what's deliberately out of scope). Any other directive name is recorded without further
+    /// validation; a bare `%` with no name at all is malformed.
+    let private parseDirectiveLine (cur: Cursor) : string * string =
+        let startPos = cur.Position
+        cur.Advance() // '%'
+        let nameStart = cur.Offset
+        while (match cur.Peek() with
+               | Some c when not (System.Char.IsWhiteSpace c) -> true
+               | _ -> false) do
+            cur.Advance()
+        let name = cur.Source.Substring(nameStart, cur.Offset - nameStart)
+        cur.SkipBlanks() |> ignore
+        let valueStart = cur.Offset
+        while not (cur.IsEndOfLine()) && not (isCommentStart cur) do
+            cur.Advance()
+        let value = cur.Source.Substring(valueStart, cur.Offset - valueStart).TrimEnd(' ', '\t')
+        let malformed (detail: string) : 'a =
+            raise (cur.ErrorAt(detail, startPos.Line, startPos.Column))
+        match name with
+        | "" -> malformed "Malformed directive: expected a name after '%'"
+        | "YAML" ->
+            let parts = value.Split('.')
+            let isDigits (s: string) = s.Length > 0 && s |> Seq.forall System.Char.IsDigit
+            if parts.Length <> 2 || not (isDigits parts.[0]) || not (isDigits parts.[1]) then
+                malformed (sprintf "Malformed %%YAML directive — expected 'MAJOR.MINOR', got '%s'" value)
+        | "TAG" ->
+            let parts = value.Split([| ' '; '\t' |], 2)
+            let handleOk (h: string) =
+                h = "!" || h = "!!" || (h.Length >= 2 && h.StartsWith "!" && h.EndsWith "!")
+            if parts.Length <> 2 || not (handleOk parts.[0]) || parts.[1].Trim() = "" then
+                malformed (sprintf "Malformed %%TAG directive — expected '<handle> <prefix>', got '%s'" value)
+        | _ -> ()
+        cur.SkipBlanksAndComment()
+        cur.SkipLineBreak() |> ignore
+        (name, value)
+
+    /// Scans and consumes any `%` directives at the start of a document, then the document's
+    /// `---` marker if one follows (mandatory when directives were seen; optional otherwise, per
+    /// the plan: "`---` starts a new document (also legal as the very first line, optional)").
+    /// Returns the directives in source order and whether a marker was consumed. Raises on a
+    /// duplicate `%YAML` directive, a duplicate `%TAG` handle, or directives with no following
+    /// `---` — directives "may only appear before a `---` that starts the document they apply
+    /// to", so a document with directives but no marker is malformed.
+    let private parseDirectivesAndMarker (cur: Cursor) : (string * string) list * bool =
         skipBlankLines cur
-        if cur.IsEof then
-            YamlValue.Null
+        let directives = ResizeArray<string * string>()
+        let mutable yamlSeen = false
+        let tagHandles = HashSet<string>()
+        let mutable scanning = true
+        while scanning do
+            skipBlankLines cur
+            if not cur.IsEof && cur.Column = 1 && cur.Peek() = Some '%' then
+                let linePos = cur.Position
+                let name, value = parseDirectiveLine cur
+                match name with
+                | "YAML" ->
+                    if yamlSeen then
+                        raise (
+                            YamlParseException(
+                                "Duplicate %YAML directive in the same document",
+                                cur.Source,
+                                linePos.Line,
+                                linePos.Column
+                            )
+                        )
+                    yamlSeen <- true
+                | "TAG" ->
+                    let handle = value.Split([| ' '; '\t' |], 2).[0]
+                    if not (tagHandles.Add handle) then
+                        raise (
+                            YamlParseException(
+                                sprintf "Duplicate %%TAG directive for handle '%s'" handle,
+                                cur.Source,
+                                linePos.Line,
+                                linePos.Column
+                            )
+                        )
+                | _ -> ()
+                directives.Add((name, value))
+            else
+                scanning <- false
+        skipBlankLines cur
+        let hasMarker = not cur.IsEof && isDocumentStartMarkerAt cur
+        if directives.Count > 0 && not hasMarker then
+            raise (cur.Error "A '%' directive must be followed by a '---' document start marker")
+        if hasMarker then
+            cur.Advance(3)
+            cur.SkipBlanks() |> ignore // leaves any same-line inline content (`--- foo`) for parseValueAfterMarker
+        (List.ofSeq directives, hasMarker)
+
+    /// Parses the document's root node. When a `---` marker was just consumed (`hadMarker`),
+    /// this is exactly the "value that follows a marker" shape already handled by
+    /// `parseValueAfterMarker` (inline same-line content, content on a following more-indented
+    /// line, or a block scalar) — reused here with a synthetic `blockIndent` of `-1` so a nested
+    /// value only needs to be indented past nothing at all. Without a marker, this is the
+    /// original Phase 4 root-parsing logic: an explicit `CountIndent` + tab check on the true
+    /// first line, since (unlike after a marker) leading whitespace there *is* indentation.
+    let private parseDocumentBody (cur: Cursor) (hadMarker: bool) (state: ParseState) : YamlValue =
+        if hadMarker then
+            parseValueAfterMarker cur -1 state
         else
-            let curIndent, tabError = cur.CountIndent()
-            match tabError with
-            | Some off -> raise (tabIndentError cur off)
-            | None -> ()
-            cur.Advance(curIndent)
-            let value =
+            skipBlankLines cur
+            if cur.IsEof || isAnyDocMarkerAt cur then
+                YamlValue.Null
+            else
+                let curIndent, tabError = cur.CountIndent()
+                match tabError with
+                | Some off -> raise (tabIndentError cur off)
+                | None -> ()
+                cur.Advance(curIndent)
                 match cur.Peek() with
                 | Some ('|' | '>') -> parseBlockScalar cur -1
                 | _ -> parseNodeAt cur curIndent -1 state
-            skipBlankLines cur
-            if not cur.IsEof then
+
+    /// Consumes an optional `...` document-end marker (and its trailing comment/line break), if
+    /// one is present at the cursor's current position. A no-op otherwise — the `...` marker is
+    /// always optional per the plan.
+    let private consumeDocumentEnd (cur: Cursor) : unit =
+        skipBlankLines cur
+        if not cur.IsEof && isDocumentEndMarkerAt cur then
+            cur.Advance(3)
+            cur.SkipBlanksAndComment()
+            cur.SkipLineBreak() |> ignore
+
+    /// Parses a single document from `cur` (directives, optional `---`, the node itself, optional
+    /// `...`), leaving the cursor positioned right after it — at EOF, at a following `---` marker
+    /// that starts the next document in a stream, or (if neither) at whatever unexpected content
+    /// follows, for the caller to turn into a parse error. Returns the node together with the
+    /// directives captured for it, in source order — the piece `YamlDocument.Parse` needs;
+    /// comment capture remains Phase 8's job.
+    let private parseOneDocument (cur: Cursor) (state: ParseState) : YamlValue * (string * string) list =
+        let directives, hadMarker = parseDirectivesAndMarker cur
+        let value = parseDocumentBody cur hadMarker state
+        consumeDocumentEnd cur
+        (value, directives)
+
+    /// Parses a whole document — the Phase 4 entry point, extended in Phase 7 with directives and
+    /// an optional leading `---` marker. Leading/trailing blank lines and comments are skipped; an
+    /// empty (all-whitespace/comment) document resolves to `YamlValue.Null`. A second document
+    /// (introduced by another `---`) or any other trailing content is a parse error — for a
+    /// genuine multi-document stream, use `parseStreamWithDirectives`/`ParseMultiple`.
+    ///
+    /// `disableMergeKeys` turns off `<<: *base` merge-key expansion for this parse (on by default
+    /// — see `YamlValueParsing.Parse`).
+    let parseDocumentWithDirectives (text: string) (disableMergeKeys: bool) : YamlValue * (string * string) list =
+        let cur = Cursor(text)
+        let state = ParseState(not disableMergeKeys)
+        let value, directives = parseOneDocument cur state
+        skipBlankLines cur
+        if not cur.IsEof then
+            if isDocumentStartMarkerAt cur then
+                raise (
+                    cur.Error
+                        "Multiple documents found in stream; use YamlValue.ParseMultiple or YamlDocument.ParseMultiple to parse a multi-document stream"
+                )
+            else
                 raise (cur.Error "Unexpected content after document")
-            value
+        (value, directives)
+
+    /// `parseDocumentWithDirectives`, discarding the directives — the plain `YamlValue.Parse`
+    /// entry point.
+    let parseDocument (text: string) (disableMergeKeys: bool) : YamlValue =
+        parseDocumentWithDirectives text disableMergeKeys |> fst
+
+    /// Parses a `---`-separated stream of zero or more documents, each with its own directives
+    /// (reset per document, per the plan) and optional `---`/`...` markers. An empty (all-
+    /// whitespace/comment) stream yields zero documents.
+    let parseStreamWithDirectives
+        (text: string)
+        (disableMergeKeys: bool)
+        : (YamlValue * (string * string) list) list =
+        let cur = Cursor(text)
+        let results = ResizeArray<YamlValue * (string * string) list>()
+        skipBlankLines cur
+        let mutable continueLoop = not cur.IsEof
+        while continueLoop do
+            let state = ParseState(not disableMergeKeys)
+            let value, directives = parseOneDocument cur state
+            results.Add((value, directives))
+            skipBlankLines cur
+            if cur.IsEof then
+                continueLoop <- false
+            elif isDocumentStartMarkerAt cur then
+                () // next iteration's parseDirectivesAndMarker consumes it
+            else
+                raise (cur.Error "Unexpected content after document")
+        List.ofSeq results
+
+    /// `parseStreamWithDirectives`, discarding each document's directives — the plain
+    /// `YamlValue.ParseMultiple` entry point.
+    let parseStream (text: string) (disableMergeKeys: bool) : YamlValue list =
+        parseStreamWithDirectives text disableMergeKeys |> List.map fst
 
 /// Adds the `Parse` entry point to `YamlValue`. Phase 3 only supports flow-style documents (a
 /// single flow node, including a bare scalar) — see `YamlParser.parseDocument`. Full block-style
@@ -1286,9 +1491,46 @@ module internal YamlParser =
 [<AutoOpen>]
 module YamlValueParsing =
 
+    /// Shared `Load`/`AsyncLoad` plumbing for both `YamlValue` and `YamlDocument`: reads the text
+    /// behind a `uri`, which may be an `http(s)` URL (fetched via `HttpClient`) or a local file
+    /// path (read via `File.OpenRead`), with an optional explicit `Encoding` (UTF-8 detected from
+    /// a BOM, or defaulted to UTF-8, when none is given).
+    module internal YamlLoad =
+        let private tryWebUri (uri: string) : System.Uri option =
+            match System.Uri.TryCreate(uri, System.UriKind.Absolute) with
+            | true, u when u.Scheme = System.Uri.UriSchemeHttp || u.Scheme = System.Uri.UriSchemeHttps -> Some u
+            | _ -> None
+
+        /// Asynchronously reads the full text at `uri` using `encoding` if given, else UTF-8 (with
+        /// BOM detection for local files).
+        let readTextAsync (uri: string) (encoding: Encoding option) : Async<string> =
+            async {
+                match tryWebUri uri with
+                | Some u ->
+                    use client = new System.Net.Http.HttpClient()
+                    let! bytes = client.GetByteArrayAsync(u) |> Async.AwaitTask
+                    let enc = defaultArg encoding Encoding.UTF8
+                    return enc.GetString(bytes)
+                | None ->
+                    use fs = File.OpenRead(uri)
+                    use reader =
+                        match encoding with
+                        | Some enc -> new StreamReader(fs, enc)
+                        | None -> new StreamReader(fs, true)
+                    return! reader.ReadToEndAsync() |> Async.AwaitTask
+            }
+
+        /// Synchronous convenience wrapper over `readTextAsync`, for the non-async `Load`
+        /// overloads.
+        let readText (uri: string) (encoding: Encoding option) : string =
+            readTextAsync uri encoding |> Async.RunSynchronously
+
     type YamlValue with
-        /// Parses a single YAML document. Comments are discarded; use `YamlDocument.Parse` (once
-        /// it exists — Phase 8) to keep them. Raises `YamlParseException` on invalid input.
+        /// Parses a single YAML document. Comments are discarded; use `YamlDocument.Parse` to
+        /// keep them (directives are captured there too; comment capture itself remains Phase
+        /// 8's job). Raises `YamlParseException` on invalid input — including a second `---`-
+        /// introduced document following the first; use `ParseMultiple` for a genuine
+        /// multi-document stream.
         ///
         /// `disableMergeKeys` turns off `<<: *base` merge-key expansion — on by default (near-
         /// universal in docker-compose/GitLab CI); when disabled, a mapping entry whose key is
@@ -1296,3 +1538,99 @@ module YamlValueParsing =
         /// enclosing mapping.
         static member Parse(text: string, ?disableMergeKeys: bool) : YamlValue =
             YamlParser.parseDocument text (defaultArg disableMergeKeys false)
+
+        /// Attempts to parse a single YAML document; returns `None` on any parse failure
+        /// (`YamlParseException`) rather than throwing.
+        static member TryParse(text: string) : YamlValue option =
+            try
+                Some(YamlValue.Parse text)
+            with :? YamlParseException ->
+                None
+
+        /// Parses a `---`-separated multi-document stream. Each document may carry its own
+        /// `%YAML`/`%TAG` directives and optional `---`/`...` markers; an empty (all-whitespace/
+        /// comment) stream yields zero documents.
+        static member ParseMultiple(text: string) : YamlValue seq =
+            YamlParser.parseStream text false :> seq<_>
+
+        /// Loads a single document from a stream, read to end as text (using the stream's own
+        /// default text decoding — see the `TextReader`/`uri` overloads for explicit encoding
+        /// control).
+        static member Load(stream: Stream) : YamlValue =
+            use reader = new StreamReader(stream)
+            YamlValue.Parse(reader.ReadToEnd())
+
+        /// Loads a single document from a `TextReader`.
+        static member Load(reader: TextReader) : YamlValue =
+            YamlValue.Parse(reader.ReadToEnd())
+
+        /// Loads a single document from a file path or `http(s)` URL. `encoding` defaults to
+        /// UTF-8 (with BOM detection for local files).
+        static member Load(uri: string, ?encoding: Encoding) : YamlValue =
+            YamlValue.Parse(YamlLoad.readText uri encoding)
+
+        /// Asynchronously loads a single document from a file path or `http(s)` URL. `encoding`
+        /// defaults to UTF-8 (with BOM detection for local files).
+        static member AsyncLoad(uri: string, ?encoding: Encoding) : Async<YamlValue> =
+            async {
+                let! text = YamlLoad.readTextAsync uri encoding
+                return YamlValue.Parse text
+            }
+
+/// Adds the `Parse`/`TryParse`/`ParseMultiple`/`Load`/`AsyncLoad` family to `YamlDocument`,
+/// mirroring `YamlValue`'s but also capturing `%YAML`/`%TAG` directives (in `Directives`, source
+/// order, reset per document). `Comments` is always `Map.empty` and `Trailing` always `[]` for
+/// now — comment capture during parsing is Phase 8's job; until then `YamlDocument` round-trips
+/// directives but not comments.
+[<AutoOpen>]
+module YamlDocumentParsing =
+
+    /// Wraps a parsed value + its directives into a `YamlDocument` with empty comment/trailing
+    /// data (see the module doc comment above).
+    let private toDocument (value: YamlValue, directives: (string * string) list) : YamlDocument =
+        { Value = value
+          Comments = Map.empty
+          Directives = directives
+          Trailing = [] }
+
+    type YamlDocument with
+        /// Parses a single document, preserving directives (not yet comments — see the module
+        /// doc comment). Raises `YamlParseException` on invalid input, including a second
+        /// `---`-introduced document; use `ParseMultiple` for a genuine multi-document stream.
+        static member Parse(text: string) : YamlDocument =
+            YamlParser.parseDocumentWithDirectives text false |> toDocument
+
+        /// Attempts to parse a single document; returns `None` on any parse failure rather than
+        /// throwing.
+        static member TryParse(text: string) : YamlDocument option =
+            try
+                Some(YamlDocument.Parse text)
+            with :? YamlParseException ->
+                None
+
+        /// Parses a multi-document stream, preserving each document's own directives.
+        static member ParseMultiple(text: string) : YamlDocument seq =
+            YamlParser.parseStreamWithDirectives text false
+            |> Seq.map toDocument
+
+        /// Loads a single document from a stream.
+        static member Load(stream: Stream) : YamlDocument =
+            use reader = new StreamReader(stream)
+            YamlDocument.Parse(reader.ReadToEnd())
+
+        /// Loads a single document from a `TextReader`.
+        static member Load(reader: TextReader) : YamlDocument =
+            YamlDocument.Parse(reader.ReadToEnd())
+
+        /// Loads a single document from a file path or `http(s)` URL. `encoding` defaults to
+        /// UTF-8 (with BOM detection for local files).
+        static member Load(uri: string, ?encoding: Encoding) : YamlDocument =
+            YamlDocument.Parse(YamlValueParsing.YamlLoad.readText uri encoding)
+
+        /// Asynchronously loads a single document from a file path or `http(s)` URL. `encoding`
+        /// defaults to UTF-8 (with BOM detection for local files).
+        static member AsyncLoad(uri: string, ?encoding: Encoding) : Async<YamlDocument> =
+            async {
+                let! text = YamlValueParsing.YamlLoad.readTextAsync uri encoding
+                return YamlDocument.Parse text
+            }
