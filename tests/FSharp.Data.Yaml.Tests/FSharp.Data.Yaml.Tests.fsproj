@@ -13,6 +13,7 @@
     <Compile Include="YamlValueTests.fs" />
     <Compile Include="YamlReaderTests.fs" />
     <Compile Include="ScalarTests.fs" />
+    <Compile Include="FlowTests.fs" />
     <Compile Include="PlaceholderTests.fs" />
   </ItemGroup>
 
