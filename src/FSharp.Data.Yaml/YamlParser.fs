@@ -17,15 +17,65 @@ module internal YamlParser =
 
     open YamlReader
 
+    /// Collects leading/trailing comments encountered during a comment-capturing parse
+    /// (`YamlDocument.Parse` and friends), keyed by the `YamlPath` of the node they attach to.
+    /// Entirely absent (`ParseState.Sink = None`) on the plain `YamlValue.Parse` path, so nothing
+    /// here is allocated or touched beyond a cheap `Option` check at each potential capture point
+    /// — see `captureTrailingComment`/`pushPathAndRecordLeading` below.
+    type internal CommentSink() =
+        let leading = Dictionary<YamlPath, ResizeArray<string>>()
+        let trailing = Dictionary<YamlPath, string>()
+        let docTrailing = ResizeArray<string>()
+
+        /// Appends one or more already-trimmed leading comment lines to the node at `path`, in
+        /// source order. A no-op when `lines` is empty.
+        member _.AddLeading(path: YamlPath, lines: string list) : unit =
+            if not (List.isEmpty lines) then
+                match leading.TryGetValue path with
+                | true, existing -> existing.AddRange lines
+                | false, _ -> leading.[path] <- ResizeArray<string>(lines: string list)
+
+        /// Records the single same-line trailing comment for the node at `path`.
+        member _.SetTrailing(path: YamlPath, text: string) : unit = trailing.[path] <- text
+
+        /// Records one comment line appearing after the document's last node.
+        member _.AddDocumentTrailing(text: string) : unit = docTrailing.Add text
+
+        /// Builds the final `Map<YamlPath, YamlNodeComments>` from everything collected so far.
+        member _.ToCommentsMap() : Map<YamlPath, YamlNodeComments> =
+            let paths = HashSet<YamlPath>()
+            for kv in leading do
+                paths.Add kv.Key |> ignore
+            for kv in trailing do
+                paths.Add kv.Key |> ignore
+            paths
+            |> Seq.map (fun p ->
+                let lead =
+                    match leading.TryGetValue p with
+                    | true, v -> List.ofSeq v
+                    | false, _ -> []
+                let trail =
+                    match trailing.TryGetValue p with
+                    | true, v -> Some v
+                    | false, _ -> None
+                p, { Leading = lead; Trailing = trail })
+            |> Map.ofSeq
+
+        /// Comments appearing after the document's last node, in source order.
+        member _.Trailing: string list = List.ofSeq docTrailing
+
     /// Per-document parsing state threaded through both the flow and block parsers: the anchor
     /// table (name -> the already-fully-parsed `YamlValue` it names — a shared reference to the
     /// same immutable array-backed value, not a copy, since every alias site just looks the value
     /// up and reuses it), the set of anchor names whose node is still being constructed (used to
-    /// guard against a recursive alias — see `resolveAlias`), and whether merge-key expansion is
-    /// enabled for this parse.
-    type internal ParseState(mergeKeysEnabled: bool) =
+    /// guard against a recursive alias — see `resolveAlias`), whether merge-key expansion is
+    /// enabled for this parse, and (Phase 8) an optional comment sink plus the path of the node
+    /// currently being parsed — both meaningful only when comment capture is enabled.
+    type internal ParseState(mergeKeysEnabled: bool, ?commentSink: CommentSink) =
         let anchors = Dictionary<string, YamlValue>()
         let inFlight = HashSet<string>()
+        let pathStack = ResizeArray<YamlPathStep>()
+        let pendingLeading = ResizeArray<string>()
 
         /// Records that `name`'s node has started parsing — guards a direct or indirect
         /// self-reference for as long as this anchor's node is still under construction.
@@ -49,6 +99,37 @@ module internal YamlParser =
         /// Whether merge-key (`<<`) expansion should be applied to mappings parsed under this
         /// state. See `applyMergeKeys`.
         member _.MergeKeysEnabled = mergeKeysEnabled
+
+        /// `Some` only for a comment-capturing parse (`YamlDocument.Parse` and friends); `None`
+        /// for the plain `YamlValue.Parse` path.
+        member _.Sink = commentSink
+
+        /// The path (root-first) of the node currently being parsed, built up by
+        /// `PushPath`/`PopPath` as the block mapping/sequence parsers descend. Only meaningful
+        /// (and only maintained) when `Sink` is `Some`.
+        member _.CurrentPath: YamlPath = List.ofSeq pathStack
+
+        /// Pushes one more step onto the current path — called right before parsing a mapping
+        /// entry's value or a sequence entry's value.
+        member _.PushPath(step: YamlPathStep) = pathStack.Add step
+
+        /// Pops the step pushed by the matching `PushPath`, once that entry's value has been
+        /// fully parsed.
+        member _.PopPath() = pathStack.RemoveAt(pathStack.Count - 1)
+
+        /// A single buffer, shared across every nesting level of this parse, holding comment
+        /// lines collected by the most recent "skip to the next block entry" call that haven't
+        /// yet been claimed as some entry's leading comments. It is deliberately *not* local to
+        /// each `parseBlockMapping`/`parseBlockSequence` call: when a nested collection's own
+        /// "is there another entry" check comes back false (a dedent back out to an enclosing
+        /// collection, most commonly), whatever it collected along the way must remain available
+        /// for the *enclosing* collection's next entry to claim — e.g. `parent:\n  child: 1\n#
+        /// note\nsibling: 2` — the nested `child` mapping collects "note" while looking for a
+        /// second entry of its own, finds none (dedent), and returns without touching the buffer;
+        /// the outer mapping's loop then resumes, sees "sibling" as its next entry, and claims
+        /// "note" as its leading comment. Only meaningful when `Sink` is `Some`; whatever is left
+        /// unclaimed once the whole document has been parsed becomes `YamlDocument.Trailing`.
+        member _.PendingLeading = pendingLeading
 
     /// Characters that delimit a flow scalar/collection: comma and the four bracket/brace
     /// chars. `:` is handled separately since whether it terminates a plain scalar depends on
@@ -590,7 +671,12 @@ module internal YamlParser =
     /// entries and to find the start/end of a document. Does not skip past an illegal
     /// indentation tab — it leaves that line unconsumed so the caller's own `CountIndent` call
     /// discovers (and reports) the same tab error.
-    let rec private skipBlankLines (cur: Cursor) : unit =
+    ///
+    /// `collect`, when `Some`, receives each full comment line's text (trimmed, `#` and
+    /// surrounding whitespace stripped) in source order — Phase 8's hook for gathering leading
+    /// comments ahead of the next block entry. Every call site that doesn't care passes `None`,
+    /// which costs nothing beyond the `Option` match already needed to decide that.
+    let rec private skipBlankLines (cur: Cursor) (collect: ResizeArray<string> option) : unit =
         let mutable moved = true
         while moved do
             moved <- false
@@ -603,7 +689,12 @@ module internal YamlParser =
                 match cur.Peek() with
                 | None -> ()
                 | Some '#' ->
-                    cur.SkipComment() |> ignore
+                    let text = cur.SkipComment()
+                    (match collect with
+                     | Some buf ->
+                         let trimmed = text.Trim()
+                         if trimmed <> "" then buf.Add trimmed
+                     | None -> ())
                     cur.SkipLineBreak() |> ignore
                     moved <- true
                 | Some ('\n' | '\r') ->
@@ -652,6 +743,47 @@ module internal YamlParser =
                 | Some (' ' | '\t') -> true
                 | _ -> false)
         | _ -> false
+
+    /// (Phase 8) When comment capture is enabled, looks for a same-line trailing `#` comment
+    /// right after the cursor's current position — skipping only blanks, never a line break —
+    /// and records it against `path` in the sink. A no-op, leaving the cursor untouched, when:
+    /// capture is disabled; the cursor is already at column 1 (meaning whatever was just parsed
+    /// already consumed through its own trailing line break — a block scalar, a nested block
+    /// collection, or EOF — so there is no "same line" left to look at); or there simply is no
+    /// comment there.
+    let private captureTrailingComment (cur: Cursor) (state: ParseState) (path: YamlPath) : unit =
+        match state.Sink with
+        | None -> ()
+        | Some sink ->
+            if cur.Column <> 1 then
+                let saved = cur.Position
+                cur.SkipBlanks() |> ignore
+                match cur.Peek() with
+                | Some '#' when isCommentStart cur ->
+                    let text = (cur.SkipComment()).Trim()
+                    if text <> "" then sink.SetTrailing(path, text)
+                | _ -> cur.Seek(saved)
+
+    /// (Phase 8) When comment capture is enabled, records `leading` (already-collected comment
+    /// lines) against the child path `state.CurrentPath @ [step]` and pushes `step` onto the
+    /// path stack for the duration of parsing that child's value. The caller must pair this with
+    /// `popPathIfCapturing` once the value has been fully parsed. Returns the child path — `[]`
+    /// (never used) when capture is disabled.
+    let private pushPathAndRecordLeading (state: ParseState) (step: YamlPathStep) (leading: string list) : YamlPath =
+        match state.Sink with
+        | None -> []
+        | Some sink ->
+            let childPath = state.CurrentPath @ [ step ]
+            if not (List.isEmpty leading) then sink.AddLeading(childPath, leading)
+            state.PushPath step
+            childPath
+
+    /// Pops the path step pushed by `pushPathAndRecordLeading`, when comment capture is enabled.
+    let private popPathIfCapturing (state: ParseState) : unit =
+        match state.Sink with
+        | Some _ -> state.PopPath()
+        | None -> ()
+
 
     /// Like `skipBlankLines`, but counts the blank/comment-only lines skipped — used by
     /// multi-line plain-scalar folding to know how many line breaks a gap between two content
@@ -928,7 +1060,14 @@ module internal YamlParser =
     /// Chomping: `-` (strip) drops the final line break entirely; `+` (keep) preserves every
     /// trailing line break/blank line; the default (clip) keeps exactly one trailing line break
     /// and drops any further trailing blank lines.
-    let private parseBlockScalar (cur: Cursor) (parentIndent: int) : YamlValue =
+    ///
+    /// `state` is used only for (Phase 8) comment capture: a trailing comment on the header line
+    /// itself (`|  # comment`) describes the whole block scalar, not its content, so it is
+    /// recorded — when capture is enabled — against `state.CurrentPath`, i.e. whatever entry this
+    /// block scalar is the value of (the caller has already pushed that path before reaching
+    /// here; see the `pushPathAndRecordLeading` call sites in `parseBlockMapping`/
+    /// `parseBlockSequence`).
+    let private parseBlockScalar (cur: Cursor) (parentIndent: int) (state: ParseState) : YamlValue =
         let isFolded = cur.Peek() = Some '>'
         cur.Advance() // consume '|' or '>'
         let mutable chomp = Clip
@@ -955,7 +1094,12 @@ module internal YamlParser =
         (match cur.Peek() with
          | None
          | Some ('\n' | '\r') -> ()
-         | Some '#' when isCommentStart cur -> cur.SkipComment() |> ignore
+         | Some '#' when isCommentStart cur ->
+             match state.Sink with
+             | None -> cur.SkipComment() |> ignore
+             | Some sink ->
+                 let text = (cur.SkipComment()).Trim()
+                 if text <> "" then sink.SetTrailing(state.CurrentPath, text)
          | Some c -> raise (cur.Error(sprintf "Invalid character '%c' in block scalar header" c)))
         cur.SkipLineBreak() |> ignore
 
@@ -1104,7 +1248,7 @@ module internal YamlParser =
             | None -> YamlValue.Null
         | Some ('\n' | '\r') -> parseIndentedValueWithTag cur blockIndent state tagOpt
         | Some '#' when isCommentStart cur -> parseIndentedValueWithTag cur blockIndent state tagOpt
-        | Some ('|' | '>') -> applyTagToScalar cur tagOpt (parseBlockScalar cur blockIndent)
+        | Some ('|' | '>') -> applyTagToScalar cur tagOpt (parseBlockScalar cur blockIndent state)
         | Some _ ->
             let inlineIndent = cur.Column - 1
             parseNodeAtWithTag cur inlineIndent blockIndent state tagOpt
@@ -1126,7 +1270,7 @@ module internal YamlParser =
         (tagOpt: string option)
         : YamlValue =
         let saved = cur.Position
-        skipBlankLines cur
+        skipBlankLines cur None
         if cur.IsEof then
             match tagOpt with
             | Some tag -> applyCoreTag cur tag ""
@@ -1144,24 +1288,29 @@ module internal YamlParser =
             else
                 cur.Advance(curIndent)
                 match cur.Peek() with
-                | Some ('|' | '>') -> applyTagToScalar cur tagOpt (parseBlockScalar cur parentIndent)
+                | Some ('|' | '>') -> applyTagToScalar cur tagOpt (parseBlockScalar cur parentIndent state)
                 | _ -> parseNodeAtWithTag cur curIndent parentIndent state tagOpt
 
     /// Parses a block sequence — `- item` entries sharing the indent `indent` (the column of
     /// each `-`) — with the cursor already positioned at the first `-`. Arbitrary nesting and
     /// compact notation (`- - a`, `- key: value`) fall out of `parseValueAfterMarker`/
-    /// `parseNodeAt`. Comments and blank lines between entries are transparently skipped.
+    /// `parseNodeAt`. Comments and blank lines between entries are transparently skipped — when
+    /// comment capture is enabled (Phase 8), a run of leading comments immediately above a
+    /// (non-first) entry is attached to that entry's `Index i` path, and a same-line comment
+    /// after an entry's value is attached there too as its trailing comment.
     and private parseBlockSequence (cur: Cursor) (indent: int) (state: ParseState) : YamlValue =
         let items = ResizeArray<YamlValue>()
         let mutable continueLoop = true
         let mutable isFirst = true
+        let mutable idx = 0
         while continueLoop do
             let atEntry =
                 if isFirst then
                     isFirst <- false
                     true
                 else
-                    skipBlankLines cur
+                    let collect = match state.Sink with Some _ -> Some state.PendingLeading | None -> None
+                    skipBlankLines cur collect
                     if cur.IsEof || isAnyDocMarkerAt cur then
                         false
                     else
@@ -1177,14 +1326,24 @@ module internal YamlParser =
                             cur.Advance(curIndent)
                             true
             if not atEntry then
+                // Leave `state.PendingLeading` untouched — see its doc comment: whatever was
+                // collected while looking for another entry here remains available for an
+                // enclosing collection's next entry to claim, or becomes document trailing if
+                // nothing ever does.
                 continueLoop <- false
             else
                 if not (isDashIndicator cur) then
                     raise (cur.Error "Expected '-' to start a block sequence entry")
+                let leading = List.ofSeq state.PendingLeading
+                state.PendingLeading.Clear()
                 let dashIndent = cur.Column - 1
                 cur.Advance() // consume '-'
+                let childPath = pushPathAndRecordLeading state (Index idx) leading
                 let value = parseValueAfterMarker cur dashIndent state
+                popPathIfCapturing state
+                captureTrailingComment cur state childPath
                 items.Add(value)
+                idx <- idx + 1
         YamlValue.Sequence(items.ToArray())
 
     /// Parses a block mapping — `key: value` (and/or `? key` / `: value`) entries sharing the
@@ -1199,6 +1358,10 @@ module internal YamlParser =
     /// on a following more-indented line" path (`? \n  - a\n  - b\n: value`), which falls out of
     /// `parseIndentedValue`'s full recursion for free. A block collection starting inline right
     /// after `? ` on the same line is not supported — not valid YAML in the first place.
+    ///
+    /// When comment capture is enabled (Phase 8), a run of leading comments immediately above a
+    /// (non-first) entry is attached to that entry's `Key k` path, and a same-line comment after
+    /// an entry's value is attached there too as its trailing comment.
     and private parseBlockMapping (cur: Cursor) (indent: int) (state: ParseState) : YamlValue =
         let items = ResizeArray<YamlValue * YamlValue>()
         let mutable continueLoop = true
@@ -1209,7 +1372,8 @@ module internal YamlParser =
                     isFirst <- false
                     true
                 else
-                    skipBlankLines cur
+                    let collect = match state.Sink with Some _ -> Some state.PendingLeading | None -> None
+                    skipBlankLines cur collect
                     if cur.IsEof || isAnyDocMarkerAt cur then
                         false
                     else
@@ -1225,8 +1389,14 @@ module internal YamlParser =
                             cur.Advance(curIndent)
                             true
             if not atEntry then
+                // Leave `state.PendingLeading` untouched — see its doc comment: whatever was
+                // collected while looking for another entry here remains available for an
+                // enclosing collection's next entry to claim, or becomes document trailing if
+                // nothing ever does.
                 continueLoop <- false
             elif isExplicitKeyIndicator cur then
+                let leading = List.ofSeq state.PendingLeading
+                state.PendingLeading.Clear()
                 cur.Advance() // consume '?'
                 let rightAfterQ = cur.Position
                 cur.SkipBlanks() |> ignore
@@ -1244,12 +1414,13 @@ module internal YamlParser =
                     | Some '"' -> parseDoubleQuoted cur
                     | Some _ -> YamlScalar.resolvePlainScalar ((scanBlockPlainScalar cur).Trim())
                 cur.SkipBlanks() |> ignore
+                let childPath = pushPathAndRecordLeading state (Key key) leading
                 let value =
                     if cur.Peek() = Some ':' then
                         cur.Advance()
                         parseValueAfterMarker cur indent state
                     else
-                        skipBlankLines cur
+                        skipBlankLines cur None
                         if cur.IsEof then
                             raise (cur.Error "Expected ':' to continue an explicit mapping key")
                         let colIndent, tabError = cur.CountIndent()
@@ -1263,14 +1434,21 @@ module internal YamlParser =
                             raise (cur.Error "Expected ':' to continue an explicit mapping key")
                         cur.Advance()
                         parseValueAfterMarker cur indent state
+                popPathIfCapturing state
+                captureTrailingComment cur state childPath
                 items.Add((key, value))
             elif looksLikeMappingEntry cur then
+                let leading = List.ofSeq state.PendingLeading
+                state.PendingLeading.Clear()
                 let key = parseBlockMappingKey cur
                 cur.SkipBlanks() |> ignore
                 if cur.Peek() <> Some ':' then
                     raise (cur.Error "Expected ':' after mapping key")
                 cur.Advance() // consume ':'
+                let childPath = pushPathAndRecordLeading state (Key key) leading
                 let value = parseValueAfterMarker cur indent state
+                popPathIfCapturing state
+                captureTrailingComment cur state childPath
                 items.Add((key, value))
             else
                 raise (cur.Error "Expected a mapping entry")
@@ -1333,14 +1511,22 @@ module internal YamlParser =
     /// duplicate `%YAML` directive, a duplicate `%TAG` handle, or directives with no following
     /// `---` — directives "may only appear before a `---` that starts the document they apply
     /// to", so a document with directives but no marker is malformed.
-    let private parseDirectivesAndMarker (cur: Cursor) : (string * string) list * bool =
-        skipBlankLines cur
+    ///
+    /// This runs *before* `parseDocumentBody`, so — when comment capture is enabled — any comment
+    /// lines skipped here (whether before the very first directive, between directives, or before
+    /// the `---` marker) are the earliest thing in the whole document; per the plan's "leading
+    /// comments before the document's top node" case, they are attached to the root path `[]`.
+    /// (A comment between directives/marker and directives themselves is a corner deliberately
+    /// collapsed into this same root-leading bucket rather than modelled separately.)
+    let private parseDirectivesAndMarker (cur: Cursor) (state: ParseState) : (string * string) list * bool =
+        let pending = match state.Sink with Some _ -> Some(ResizeArray<string>()) | None -> None
+        skipBlankLines cur pending
         let directives = ResizeArray<string * string>()
         let mutable yamlSeen = false
         let tagHandles = HashSet<string>()
         let mutable scanning = true
         while scanning do
-            skipBlankLines cur
+            skipBlankLines cur pending
             if not cur.IsEof && cur.Column = 1 && cur.Peek() = Some '%' then
                 let linePos = cur.Position
                 let name, value = parseDirectiveLine cur
@@ -1371,13 +1557,16 @@ module internal YamlParser =
                 directives.Add((name, value))
             else
                 scanning <- false
-        skipBlankLines cur
+        skipBlankLines cur pending
         let hasMarker = not cur.IsEof && isDocumentStartMarkerAt cur
         if directives.Count > 0 && not hasMarker then
             raise (cur.Error "A '%' directive must be followed by a '---' document start marker")
         if hasMarker then
             cur.Advance(3)
             cur.SkipBlanks() |> ignore // leaves any same-line inline content (`--- foo`) for parseValueAfterMarker
+        (match state.Sink, pending with
+         | Some sink, Some buf when buf.Count > 0 -> sink.AddLeading([], List.ofSeq buf)
+         | _ -> ())
         (List.ofSeq directives, hasMarker)
 
     /// Parses the document's root node. When a `---` marker was just consumed (`hadMarker`),
@@ -1387,11 +1576,18 @@ module internal YamlParser =
     /// value only needs to be indented past nothing at all. Without a marker, this is the
     /// original Phase 4 root-parsing logic: an explicit `CountIndent` + tab check on the true
     /// first line, since (unlike after a marker) leading whitespace there *is* indentation.
+    ///
+    /// Root-level leading comments (Phase 8) are captured earlier, by `parseDirectivesAndMarker`
+    /// — since that always runs first and would otherwise silently consume them (looking for
+    /// `%` directives / a `---` marker) before this function ever saw them. A leading `---`
+    /// marker's own trailing comment handling is left to `parseValueAfterMarker`/
+    /// `parseIndentedValueWithTag`, which do not collect — a deliberately-skipped corner for this
+    /// phase.
     let private parseDocumentBody (cur: Cursor) (hadMarker: bool) (state: ParseState) : YamlValue =
         if hadMarker then
             parseValueAfterMarker cur -1 state
         else
-            skipBlankLines cur
+            skipBlankLines cur None
             if cur.IsEof || isAnyDocMarkerAt cur then
                 YamlValue.Null
             else
@@ -1401,29 +1597,66 @@ module internal YamlParser =
                 | None -> ()
                 cur.Advance(curIndent)
                 match cur.Peek() with
-                | Some ('|' | '>') -> parseBlockScalar cur -1
+                | Some ('|' | '>') -> parseBlockScalar cur -1 state
                 | _ -> parseNodeAt cur curIndent -1 state
+
+    /// `skipBlankLines`, but — when comment capture is enabled — every comment line encountered is
+    /// recorded straight into the sink's document-level `Trailing` list rather than being
+    /// collected for later attribution to a node. Used everywhere a skip happens *after* the root
+    /// node has been fully parsed, where there is no longer any "next node" a comment could be
+    /// leading for.
+    let private skipAndCollectTrailing (cur: Cursor) (state: ParseState) : unit =
+        match state.Sink with
+        | None -> skipBlankLines cur None
+        | Some sink ->
+            let buf = ResizeArray<string>()
+            skipBlankLines cur (Some buf)
+            for c in buf do
+                sink.AddDocumentTrailing c
 
     /// Consumes an optional `...` document-end marker (and its trailing comment/line break), if
     /// one is present at the cursor's current position. A no-op otherwise — the `...` marker is
-    /// always optional per the plan.
-    let private consumeDocumentEnd (cur: Cursor) : unit =
-        skipBlankLines cur
+    /// always optional per the plan. Everything skipped here (blank/comment lines before an
+    /// optional `...`, and a same-line comment after it) is, by construction, past the document's
+    /// last node — so under comment capture it is recorded as document-level `Trailing`. Also
+    /// flushes whatever is left in `state.PendingLeading` first — comments the innermost block
+    /// collection collected while looking for one more entry that never materialised (see its
+    /// doc comment); with the whole document now parsed, nothing will ever claim them as a
+    /// node's leading comments, so — in source order, ahead of anything gathered here — they too
+    /// become document-level `Trailing`.
+    let private consumeDocumentEndCollecting (cur: Cursor) (state: ParseState) : unit =
+        (match state.Sink with
+         | Some sink when state.PendingLeading.Count > 0 ->
+             for c in state.PendingLeading do
+                 sink.AddDocumentTrailing c
+             state.PendingLeading.Clear()
+         | _ -> ())
+        skipAndCollectTrailing cur state
         if not cur.IsEof && isDocumentEndMarkerAt cur then
             cur.Advance(3)
-            cur.SkipBlanksAndComment()
+            (match state.Sink with
+             | None -> cur.SkipBlanksAndComment()
+             | Some sink ->
+                 cur.SkipBlanks() |> ignore
+                 match cur.Peek() with
+                 | Some '#' when isCommentStart cur ->
+                     let text = (cur.SkipComment()).Trim()
+                     if text <> "" then sink.AddDocumentTrailing text
+                 | _ -> ())
             cur.SkipLineBreak() |> ignore
 
     /// Parses a single document from `cur` (directives, optional `---`, the node itself, optional
     /// `...`), leaving the cursor positioned right after it — at EOF, at a following `---` marker
     /// that starts the next document in a stream, or (if neither) at whatever unexpected content
     /// follows, for the caller to turn into a parse error. Returns the node together with the
-    /// directives captured for it, in source order — the piece `YamlDocument.Parse` needs;
-    /// comment capture remains Phase 8's job.
+    /// directives captured for it, in source order. When comment capture is enabled, also records
+    /// the root node's own same-line trailing comment (path `[]`) before anything past it is
+    /// swept up as document-level `Trailing` by `consumeDocumentEndCollecting`.
     let private parseOneDocument (cur: Cursor) (state: ParseState) : YamlValue * (string * string) list =
-        let directives, hadMarker = parseDirectivesAndMarker cur
+        let directives, hadMarker = parseDirectivesAndMarker cur state
         let value = parseDocumentBody cur hadMarker state
-        consumeDocumentEnd cur
+        captureTrailingComment cur state []
+        consumeDocumentEndCollecting cur state
         (value, directives)
 
     /// Parses a whole document — the Phase 4 entry point, extended in Phase 7 with directives and
@@ -1433,12 +1666,22 @@ module internal YamlParser =
     /// genuine multi-document stream, use `parseStreamWithDirectives`/`ParseMultiple`.
     ///
     /// `disableMergeKeys` turns off `<<: *base` merge-key expansion for this parse (on by default
-    /// — see `YamlValueParsing.Parse`).
-    let parseDocumentWithDirectives (text: string) (disableMergeKeys: bool) : YamlValue * (string * string) list =
+    /// — see `YamlValueParsing.Parse`). `captureComments` (Phase 8) turns on the `ParseState`
+    /// comment sink and path tracking used throughout this module — left `false` (the default
+    /// route, via `parseDocumentWithDirectives`/`parseDocument`) for the plain `YamlValue.Parse`
+    /// path, so that path never allocates a sink and every comment-capture call site above takes
+    /// its cheap `None` branch. `YamlDocument.Parse` goes through `parseDocumentWithComments`
+    /// instead, which passes `true`.
+    let parseDocumentFull
+        (text: string)
+        (disableMergeKeys: bool)
+        (captureComments: bool)
+        : YamlValue * (string * string) list * Map<YamlPath, YamlNodeComments> * string list =
         let cur = Cursor(text)
-        let state = ParseState(not disableMergeKeys)
+        let sink = if captureComments then Some(CommentSink()) else None
+        let state = ParseState(not disableMergeKeys, ?commentSink = sink)
         let value, directives = parseOneDocument cur state
-        skipBlankLines cur
+        skipAndCollectTrailing cur state
         if not cur.IsEof then
             if isDocumentStartMarkerAt cur then
                 raise (
@@ -1447,6 +1690,14 @@ module internal YamlParser =
                 )
             else
                 raise (cur.Error "Unexpected content after document")
+        let commentsMap = match sink with Some s -> s.ToCommentsMap() | None -> Map.empty
+        let trailingList = match sink with Some s -> s.Trailing | None -> []
+        (value, directives, commentsMap, trailingList)
+
+    /// `parseDocumentFull` with comment capture off — the plain `YamlValue.Parse` entry point
+    /// (via `parseDocument`, below).
+    let parseDocumentWithDirectives (text: string) (disableMergeKeys: bool) : YamlValue * (string * string) list =
+        let value, directives, _, _ = parseDocumentFull text disableMergeKeys false
         (value, directives)
 
     /// `parseDocumentWithDirectives`, discarding the directives — the plain `YamlValue.Parse`
@@ -1454,22 +1705,36 @@ module internal YamlParser =
     let parseDocument (text: string) (disableMergeKeys: bool) : YamlValue =
         parseDocumentWithDirectives text disableMergeKeys |> fst
 
-    /// Parses a `---`-separated stream of zero or more documents, each with its own directives
-    /// (reset per document, per the plan) and optional `---`/`...` markers. An empty (all-
-    /// whitespace/comment) stream yields zero documents.
-    let parseStreamWithDirectives
+    /// `parseDocumentFull` with comment capture on — the `YamlDocument.Parse` entry point.
+    let parseDocumentWithComments
         (text: string)
         (disableMergeKeys: bool)
-        : (YamlValue * (string * string) list) list =
+        : YamlValue * (string * string) list * Map<YamlPath, YamlNodeComments> * string list =
+        parseDocumentFull text disableMergeKeys true
+
+    /// Parses a `---`-separated stream of zero or more documents, each with its own directives
+    /// (reset per document, per the plan), fresh comment sink (when `captureComments`), and
+    /// optional `---`/`...` markers. An empty (all-whitespace/comment) stream yields zero
+    /// documents. See `parseDocumentFull` for why `captureComments` is threaded rather than always
+    /// on.
+    let parseStreamFull
+        (text: string)
+        (disableMergeKeys: bool)
+        (captureComments: bool)
+        : (YamlValue * (string * string) list * Map<YamlPath, YamlNodeComments> * string list) list =
         let cur = Cursor(text)
-        let results = ResizeArray<YamlValue * (string * string) list>()
-        skipBlankLines cur
+        let results =
+            ResizeArray<YamlValue * (string * string) list * Map<YamlPath, YamlNodeComments> * string list>()
+        skipBlankLines cur None
         let mutable continueLoop = not cur.IsEof
         while continueLoop do
-            let state = ParseState(not disableMergeKeys)
+            let sink = if captureComments then Some(CommentSink()) else None
+            let state = ParseState(not disableMergeKeys, ?commentSink = sink)
             let value, directives = parseOneDocument cur state
-            results.Add((value, directives))
-            skipBlankLines cur
+            skipAndCollectTrailing cur state
+            let commentsMap = match sink with Some s -> s.ToCommentsMap() | None -> Map.empty
+            let trailingList = match sink with Some s -> s.Trailing | None -> []
+            results.Add((value, directives, commentsMap, trailingList))
             if cur.IsEof then
                 continueLoop <- false
             elif isDocumentStartMarkerAt cur then
@@ -1478,10 +1743,26 @@ module internal YamlParser =
                 raise (cur.Error "Unexpected content after document")
         List.ofSeq results
 
+    /// `parseStreamFull` with comment capture off — the plain `YamlValue.ParseMultiple` entry
+    /// point (via `parseStream`, below).
+    let parseStreamWithDirectives
+        (text: string)
+        (disableMergeKeys: bool)
+        : (YamlValue * (string * string) list) list =
+        parseStreamFull text disableMergeKeys false
+        |> List.map (fun (v, d, _, _) -> (v, d))
+
     /// `parseStreamWithDirectives`, discarding each document's directives — the plain
     /// `YamlValue.ParseMultiple` entry point.
     let parseStream (text: string) (disableMergeKeys: bool) : YamlValue list =
         parseStreamWithDirectives text disableMergeKeys |> List.map fst
+
+    /// `parseStreamFull` with comment capture on — the `YamlDocument.ParseMultiple` entry point.
+    let parseStreamWithComments
+        (text: string)
+        (disableMergeKeys: bool)
+        : (YamlValue * (string * string) list * Map<YamlPath, YamlNodeComments> * string list) list =
+        parseStreamFull text disableMergeKeys true
 
 /// Adds the `Parse` entry point to `YamlValue`. Phase 3 only supports flow-style documents (a
 /// single flow node, including a bare scalar) — see `YamlParser.parseDocument`. Full block-style
@@ -1579,26 +1860,28 @@ module YamlValueParsing =
 
 /// Adds the `Parse`/`TryParse`/`ParseMultiple`/`Load`/`AsyncLoad` family to `YamlDocument`,
 /// mirroring `YamlValue`'s but also capturing `%YAML`/`%TAG` directives (in `Directives`, source
-/// order, reset per document). `Comments` is always `Map.empty` and `Trailing` always `[]` for
-/// now — comment capture during parsing is Phase 8's job; until then `YamlDocument` round-trips
-/// directives but not comments.
+/// order, reset per document) and — since Phase 8 — comments (`Comments`, `Trailing`), via
+/// `YamlParser.parseDocumentWithComments`/`parseStreamWithComments`.
 [<AutoOpen>]
 module YamlDocumentParsing =
 
-    /// Wraps a parsed value + its directives into a `YamlDocument` with empty comment/trailing
-    /// data (see the module doc comment above).
-    let private toDocument (value: YamlValue, directives: (string * string) list) : YamlDocument =
+    /// Wraps a parsed value + directives + comments + trailing comments into a `YamlDocument`.
+    let private toDocument
+        (value: YamlValue, directives: (string * string) list, comments: Map<YamlPath, YamlNodeComments>, trailing: string list)
+        : YamlDocument =
         { Value = value
-          Comments = Map.empty
+          Comments = comments
           Directives = directives
-          Trailing = [] }
+          Trailing = trailing }
 
     type YamlDocument with
-        /// Parses a single document, preserving directives (not yet comments — see the module
-        /// doc comment). Raises `YamlParseException` on invalid input, including a second
-        /// `---`-introduced document; use `ParseMultiple` for a genuine multi-document stream.
+        /// Parses a single document, preserving directives and comments. Leading comments above a
+        /// node and a same-line trailing comment after it are attached to that node's `YamlPath`
+        /// in `Comments`; comments after the document's last node land in `Trailing`. Raises
+        /// `YamlParseException` on invalid input, including a second `---`-introduced document;
+        /// use `ParseMultiple` for a genuine multi-document stream.
         static member Parse(text: string) : YamlDocument =
-            YamlParser.parseDocumentWithDirectives text false |> toDocument
+            YamlParser.parseDocumentWithComments text false |> toDocument
 
         /// Attempts to parse a single document; returns `None` on any parse failure rather than
         /// throwing.
@@ -1608,10 +1891,14 @@ module YamlDocumentParsing =
             with :? YamlParseException ->
                 None
 
-        /// Parses a multi-document stream, preserving each document's own directives.
+        /// Parses a multi-document stream, preserving each document's own directives and comments.
         static member ParseMultiple(text: string) : YamlDocument seq =
-            YamlParser.parseStreamWithDirectives text false
+            YamlParser.parseStreamWithComments text false
             |> Seq.map toDocument
+
+        /// Comments attached to the node at `path`, if any — a convenience wrapper over
+        /// `Comments`.
+        member this.TryGetComments(path: YamlPath) : YamlNodeComments option = Map.tryFind path this.Comments
 
         /// Loads a single document from a stream.
         static member Load(stream: Stream) : YamlDocument =
