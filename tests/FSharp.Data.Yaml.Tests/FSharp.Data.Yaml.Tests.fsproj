@@ -14,6 +14,7 @@
     <Compile Include="YamlReaderTests.fs" />
     <Compile Include="ScalarTests.fs" />
     <Compile Include="FlowTests.fs" />
+    <Compile Include="BlockTests.fs" />
     <Compile Include="PlaceholderTests.fs" />
   </ItemGroup>
 
