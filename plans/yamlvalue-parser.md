@@ -1,5 +1,7 @@
 # YamlValue — a FSharp.Data-style YAML parser
 
+Status: Done
+
 ## Context
 
 `/Users/devon.burriss/Documents/ws/dburriss/fsharp-yaml` is empty. The goal is a greenfield F# library that gives YAML the same untyped, ergonomic document API that `FSharp.Data`'s `JsonValue` gives JSON: a discriminated union you can pattern match, `Parse`/`Load`, a `?` dynamic operator, `AsInteger()`-style accessors, and a faithful `ToString()`.
