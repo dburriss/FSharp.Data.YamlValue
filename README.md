@@ -46,7 +46,7 @@ YAML it has never seen. Exactly what `JsonValue` does for JSON.
 ## Install
 
 ```sh
-dotnet add package FSharp.Data.Yaml
+dotnet add package FSharp.Data.YamlValue
 ```
 
 ## Quick start

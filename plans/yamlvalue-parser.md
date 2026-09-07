@@ -188,6 +188,6 @@ Manual smoke test at the end — parse a real-world file (a `docker-compose.yml`
 
 ---
 
-## Open item
+## Resolved item
 
-**Package name.** `FSharp.Data.Yaml` is taken on NuGet (v1.0.0, ~615 downloads). The *namespace* `FSharp.Data` is still the right home for API familiarity, but the shipped package id needs to differ — e.g. `Dburriss.FSharp.Data.Yaml` or `FSharp.Data.YamlValue`. Not blocking; only matters at pack time.
+**Package name.** `FSharp.Data.Yaml` is taken on NuGet (v1.0.0, ~615 downloads). The *namespace* `FSharp.Data` remains the right home for API familiarity; the shipped package id is `FSharp.Data.YamlValue` (set via `<PackageId>` in `src/FSharp.Data.Yaml/FSharp.Data.Yaml.fsproj`), named after the type it exports. The repo/project/assembly names stay `FSharp.Data.Yaml` — only the published NuGet package id differs.
