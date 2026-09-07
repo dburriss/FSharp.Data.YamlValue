@@ -7,6 +7,7 @@
 - [`YamlPathStep` / `YamlNodeComments`](#comment-types)
 - [`YamlExtensions`](#yamlextensions) — the `As*` accessor family
 - [`YamlExtensions` module](#yamlextensions-module) — the `?` operator
+- [`YamlBuilders`](#yamlbuilders) — `SetProperty`/`SetPath`/`RemoveProperty`/`RemovePath`, and `YamlPath`
 
 ---
 
@@ -216,3 +217,73 @@ info?name?first
 |---|---|---|
 | `Properties` | `this.Properties : unit -> (string * YamlValue)[]` | The string-keyed properties of a mapping, as name-value pairs. |
 | `Entries` | `this.Entries : unit -> (YamlValue * YamlValue)[]` | Every key-value pair of a mapping, including non-string keys. |
+
+---
+
+## YamlBuilders
+
+**Namespace:** `FSharp.Data.Yaml.Builders`
+
+`YamlValue` has no write API of its own — like `JsonValue`, it's immutable. `YamlBuilders` is an
+opt-in construction/editing API, kept in its own namespace and file (`YamlBuilders.fs`) separate
+from the read-only `YamlExtensions`. Every member returns a **new** `YamlValue`; none mutate `this`.
+
+```fsharp
+open FSharp.Data.Yaml.Builders
+```
+
+### `YamlValue` extension members
+
+| Member | Signature | Description |
+|---|---|---|
+| `SetProperty` | `SetProperty(name: string, value: YamlValue) : YamlValue` | Sets a string-keyed property, replacing it if present or appending it otherwise. `YamlValue.Null` auto-vivifies into a single-entry mapping; any other non-mapping value raises. |
+| `RemoveProperty` | `RemoveProperty(name: string) : YamlValue` | Removes a string-keyed property. No-op if the value is not a mapping, or the property is not present. |
+| `SetPath` | `SetPath(path: string, value: YamlValue, ?overwriteScalars: bool) : YamlValue` | Sets the value addressed by the string-path DSL (e.g. `"services.web.ports[0]"`). |
+| `SetPath` | `SetPath(path: YamlPath, value: YamlValue, ?overwriteScalars: bool) : YamlValue` | Same, addressed by a `YamlPath` built via the fluent builder or `YamlPath.OfSteps`. |
+| `RemovePath` | `RemovePath(path: string) : YamlValue` | Removes the value addressed by the string-path DSL. No-op if any step of the path doesn't exist. |
+| `RemovePath` | `RemovePath(path: YamlPath) : YamlValue` | Same, addressed by a `YamlPath`. |
+
+**`SetPath` semantics.** Missing intermediate mappings/sequences are auto-vivified (`mkdir -p`
+style); a sequence is padded with `YamlValue.Null` when the index is beyond its current length.
+A scalar (non-`Null`) node encountered where a container is needed to keep descending is
+overwritten by default — pass `overwriteScalars = false` to raise instead.
+
+**`RemovePath` semantics.** A no-op (returns the value unchanged) if any step of the path is
+missing. Removing a sequence index splices the element out (later elements shift down) rather
+than leaving a `Null` hole. Emptied parent mappings/sequences are left in place, not pruned.
+
+### The string-path DSL
+
+Dot-separated segments address mapping keys; `[n]` addresses a sequence index; a segment
+containing a literal `.`, `[`, or `]` is bracket-quoted, e.g. `services["a.b"].image`
+(`\"` and `\\` are unescaped inside the quotes). The DSL only expresses string-keyed mapping
+steps — non-string keys need the `YamlPath` builder's `Key(YamlValue)` overload. A malformed
+path string raises `System.FormatException`.
+
+### `YamlPath`
+
+**Namespace:** `FSharp.Data.Yaml.Builders`
+
+A fluent builder for a `YamlPathStep list` (the same root-first path type used by
+`YamlDocument.Comments`), aimed at callers — particularly from C# — for whom constructing
+`Key`/`Index` union cases directly is unidiomatic. Prefer the string-path DSL for the common
+case; reach for `YamlPath` for non-string keys or paths assembled programmatically.
+
+| Member | Signature | Description |
+|---|---|---|
+| `Root` | `static YamlPath.Root : YamlPath` | The empty path — the document root itself. |
+| `OfSteps` | `static YamlPath.OfSteps(steps: YamlPathStep list) : YamlPath` | Wraps a raw root-first step list. |
+| `Key` | `Key(name: string) : YamlPath` | Appends a string-keyed mapping step. |
+| `Key` | `Key(key: YamlValue) : YamlPath` | Appends a mapping step with an arbitrary (non-string) key. |
+| `Index` | `Index(index: int) : YamlPath` | Appends a sequence-index step. |
+| `Steps` | `this.Steps : YamlPathStep list` | The underlying root-first step list. |
+
+```fsharp
+let path = YamlPath.Root.Key("services").Key("web").Index(0)
+doc.SetPath(path, YamlValue.String "nginx:1.27")
+```
+
+```csharp
+var path = YamlPath.Root.Key("services").Key("web").Index(0);
+var updated = doc.SetPath(path, YamlValue.NewString("nginx:1.27"));
+```

@@ -213,6 +213,36 @@ The emitter quotes any string that would otherwise read back as a different type
 `"8080"`, `"null"`, `"2024-01-30"`, the empty string — so
 `Parse(v.ToString(YamlSaveOptions.None)) = v` always holds.
 
+### Building and editing
+
+`YamlValue` has no write API of its own — same as `JsonValue`, it's immutable. `YamlBuilders`
+adds an opt-in `SetProperty`/`SetPath`/`RemoveProperty`/`RemovePath` API that returns a new
+`YamlValue` rather than mutating in place, with a string-path DSL for nested edits:
+
+```fsharp
+open FSharp.Data.Yaml.Builders
+
+let doc = YamlValue.Parse """
+name: myapp
+services:
+  web:
+    image: nginx
+    ports: [80, 443]
+"""
+
+let updated =
+    doc
+        .SetProperty("name", YamlValue.String "myapp2")
+        .SetPath("services.web.image", YamlValue.String "nginx:1.27")
+        .RemovePath("services.web.ports[0]")
+```
+
+`SetPath` auto-vivifies missing intermediate mappings/sequences (`mkdir -p`-style) and pads a
+sequence with `YamlValue.Null` when the index is beyond its current length. `RemovePath` is a
+no-op when the path doesn't exist, and splices sequence elements out rather than leaving a
+`Null` hole. See `docs/reference.md` for the full API, including the `YamlPath` fluent builder
+for non-string keys — useful from C#, where DU cases are less natural to construct directly.
+
 ### Comments
 
 Comments are deliberately kept out of `YamlValue` so that pattern matching stays clean. When you

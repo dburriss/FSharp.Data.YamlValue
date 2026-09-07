@@ -14,6 +14,7 @@
     <Compile Include="YamlParser.fs" />
     <Compile Include="YamlEmitter.fs" />
     <Compile Include="YamlExtensions.fs" />
+    <Compile Include="YamlBuilders.fs" />
     <Compile Include="AssemblyInfo.fs" />
   </ItemGroup>
 
