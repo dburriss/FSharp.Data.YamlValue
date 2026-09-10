@@ -1,0 +1,7 @@
+# Service configuration
+name: web     # the public name
+port: 8080
+# tags used for routing
+tags:
+  - http
+  - public

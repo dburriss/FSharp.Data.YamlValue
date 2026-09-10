@@ -1,0 +1,9 @@
+name: Tomas
+born: 1985
+active: true
+siblings:
+  - Anna
+  - Petr
+address:
+  city: Prague
+  zip: '11000'

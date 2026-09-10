@@ -1,0 +1,12 @@
+defaults: &defaults
+  restart: always
+  logging: json-file
+
+services:
+  web:
+    <<: *defaults
+    image: nginx
+    ports: [80, 443]
+  db:
+    <<: *defaults
+    image: postgres

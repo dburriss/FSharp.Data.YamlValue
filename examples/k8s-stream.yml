@@ -1,0 +1,7 @@
+kind: Service
+name: web
+port: 8080
+---
+kind: Deployment
+name: web
+replicas: 3

@@ -1,0 +1,12 @@
+# anchors-and-merge-keys.fsx already covers `<<:` merge keys. This file is about
+# plain aliases: reusing one anchored node as a value in its own right, with no merge.
+base: &base
+  host: localhost
+  port: 5432
+
+primary: *base
+replica: *base
+
+# an alias can stand in for a whole sequence too
+regions: &regions [us-east, eu-west]
+failover: *regions
