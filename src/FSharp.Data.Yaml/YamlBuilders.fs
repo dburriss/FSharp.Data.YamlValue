@@ -235,3 +235,42 @@ type YamlValue with
     /// no-op/splice/no-prune semantics.
     member this.RemovePath(path: string) : YamlValue =
         this.RemovePath(YamlPath.OfSteps(YamlPathDsl.parse path))
+
+    // -----------------------------------------------------------------
+    // Path-addressed reads
+    // -----------------------------------------------------------------
+
+    /// Reads the value at `path`. Returns `None` if any step of `path` does not exist (a missing
+    /// mapping key, an out-of-range sequence index, or descending into a scalar/`Null`).
+    member this.TryGetPath(path: YamlPath) : YamlValue option =
+        let rec go (steps: YamlPathStep list) (node: YamlValue) : YamlValue option =
+            match steps with
+            | [] -> Some node
+            | Key k :: rest ->
+                match node with
+                | YamlValue.Mapping properties ->
+                    properties |> Array.tryFind (fun (pk, _) -> pk = k) |> Option.bind (fun (_, v) -> go rest v)
+                | _ -> None
+            | Index idx :: rest ->
+                match node with
+                | YamlValue.Sequence es when idx >= 0 && idx < es.Length -> go rest es.[idx]
+                | _ -> None
+        go path.Steps this
+
+    /// Reads the value at the string-path DSL location `path` (e.g. `"services.web.ports[0]"`).
+    /// Returns `None` under the same conditions as the `YamlPath` overload.
+    member this.TryGetPath(path: string) : YamlValue option =
+        this.TryGetPath(YamlPath.OfSteps(YamlPathDsl.parse path))
+
+    /// Reads the value at `path`, raising if any step does not exist. See `TryGetPath` for the
+    /// `None`/missing conditions this instead surfaces as an exception.
+    member this.GetPath(path: YamlPath) : YamlValue =
+        match this.TryGetPath(path) with
+        | Some v -> v
+        | None -> failwithf "YamlValue.GetPath: path not found: %A" path.Steps
+
+    /// Reads the value at the string-path DSL location `path`, raising if not found.
+    member this.GetPath(path: string) : YamlValue =
+        match this.TryGetPath(path) with
+        | Some v -> v
+        | None -> failwithf "YamlValue.GetPath: path not found: %s" path

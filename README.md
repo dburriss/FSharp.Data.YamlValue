@@ -216,8 +216,9 @@ The emitter quotes any string that would otherwise read back as a different type
 ### Building and editing
 
 `YamlValue` has no write API of its own — same as `JsonValue`, it's immutable. `YamlBuilders`
-adds an opt-in `SetProperty`/`SetPath`/`RemoveProperty`/`RemovePath` API that returns a new
-`YamlValue` rather than mutating in place, with a string-path DSL for nested edits:
+adds an opt-in `SetProperty`/`SetPath`/`RemoveProperty`/`RemovePath`/`GetPath`/`TryGetPath` API
+that returns a new `YamlValue` rather than mutating in place, with a string-path DSL for nested
+reads and edits:
 
 ```fsharp
 open FSharp.Data.Yaml.Builders
@@ -235,13 +236,17 @@ let updated =
         .SetProperty("name", YamlValue.String "myapp2")
         .SetPath("services.web.image", YamlValue.String "nginx:1.27")
         .RemovePath("services.web.ports[0]")
+
+let image = updated.TryGetPath("services.web.image") // Some (YamlValue.String "nginx:1.27")
 ```
 
 `SetPath` auto-vivifies missing intermediate mappings/sequences (`mkdir -p`-style) and pads a
 sequence with `YamlValue.Null` when the index is beyond its current length. `RemovePath` is a
 no-op when the path doesn't exist, and splices sequence elements out rather than leaving a
-`Null` hole. See `docs/reference.md` for the full API, including the `YamlPath` fluent builder
-for non-string keys — useful from C#, where DU cases are less natural to construct directly.
+`Null` hole. `TryGetPath` returns `None` (and `GetPath` raises) the moment any step of the path
+can't be followed. See `docs/reference.md` for the full API, including the `YamlPath` fluent
+builder for non-string keys — useful from C#, where DU cases are less natural to construct
+directly.
 
 ### Comments
 

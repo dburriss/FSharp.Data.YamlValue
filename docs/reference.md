@@ -242,6 +242,10 @@ open FSharp.Data.Yaml.Builders
 | `SetPath` | `SetPath(path: YamlPath, value: YamlValue, ?overwriteScalars: bool) : YamlValue` | Same, addressed by a `YamlPath` built via the fluent builder or `YamlPath.OfSteps`. |
 | `RemovePath` | `RemovePath(path: string) : YamlValue` | Removes the value addressed by the string-path DSL. No-op if any step of the path doesn't exist. |
 | `RemovePath` | `RemovePath(path: YamlPath) : YamlValue` | Same, addressed by a `YamlPath`. |
+| `TryGetPath` | `TryGetPath(path: string) : YamlValue option` | Reads the value addressed by the string-path DSL. `None` if any step doesn't exist (missing key, out-of-range index, or descending into a scalar/`Null`). |
+| `TryGetPath` | `TryGetPath(path: YamlPath) : YamlValue option` | Same, addressed by a `YamlPath`. |
+| `GetPath` | `GetPath(path: string) : YamlValue` | Same as `TryGetPath`, but raises if the path is not found. |
+| `GetPath` | `GetPath(path: YamlPath) : YamlValue` | Same, addressed by a `YamlPath`. |
 
 **`SetPath` semantics.** Missing intermediate mappings/sequences are auto-vivified (`mkdir -p`
 style); a sequence is padded with `YamlValue.Null` when the index is beyond its current length.
@@ -251,6 +255,11 @@ overwritten by default — pass `overwriteScalars = false` to raise instead.
 **`RemovePath` semantics.** A no-op (returns the value unchanged) if any step of the path is
 missing. Removing a sequence index splices the element out (later elements shift down) rather
 than leaving a `Null` hole. Emptied parent mappings/sequences are left in place, not pruned.
+
+**`TryGetPath`/`GetPath` semantics.** `TryGetPath` returns `None` (and `GetPath` raises) the
+moment any step of the path can't be followed — a missing mapping key, an out-of-range sequence
+index, or a scalar/`Null` node where a container is needed to keep descending. The empty path
+(`""` or `YamlPath.Root`) returns the value itself.
 
 ### The string-path DSL
 

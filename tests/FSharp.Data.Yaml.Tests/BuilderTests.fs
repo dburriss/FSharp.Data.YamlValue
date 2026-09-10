@@ -256,3 +256,59 @@ let ``RemovePath does not mutate the original`` () =
     let doc = YamlValue.Parse "a:\n  b: 1\n"
     doc.RemovePath("a.b") |> ignore
     Assert.Equal(YamlValue.Number 1M, doc?a?b)
+
+// ---------------------------------------------------------------------
+// TryGetPath / GetPath
+// ---------------------------------------------------------------------
+
+[<Fact>]
+let ``TryGetPath finds a nested mapping key`` () =
+    let doc = YamlValue.Parse "services:\n  web:\n    image: nginx\n"
+    Assert.Equal(Some(YamlValue.String "nginx"), doc.TryGetPath("services.web.image"))
+
+[<Fact>]
+let ``TryGetPath finds a nested sequence index`` () =
+    let doc = YamlValue.Parse "ports: [80, 443]\n"
+    Assert.Equal(Some(YamlValue.Number 443M), doc.TryGetPath("ports[1]"))
+
+[<Fact>]
+let ``TryGetPath returns None for a missing mapping key`` () =
+    let doc = YamlValue.Parse "a: 1\n"
+    Assert.Equal(None, doc.TryGetPath("b.c"))
+
+[<Fact>]
+let ``TryGetPath returns None for an out-of-range index`` () =
+    let doc = YamlValue.Parse "items: [1, 2]\n"
+    Assert.Equal(None, doc.TryGetPath("items[5]"))
+
+[<Fact>]
+let ``TryGetPath returns None when descending into a scalar`` () =
+    let doc = YamlValue.Parse "name: myapp\n"
+    Assert.Equal(None, doc.TryGetPath("name.first"))
+
+[<Fact>]
+let ``TryGetPath at the empty path returns the whole value`` () =
+    let doc = YamlValue.Parse "a: 1\n"
+    Assert.Equal(Some doc, doc.TryGetPath(""))
+
+[<Fact>]
+let ``TryGetPath via the YamlPath builder matches the string DSL`` () =
+    let doc = YamlValue.Parse "services:\n  web: nginx\n"
+    let viaDsl = doc.TryGetPath("services.web")
+    let viaBuilder = doc.TryGetPath(YamlPath.Root.Key("services").Key("web"))
+    Assert.Equal(viaDsl, viaBuilder)
+
+[<Fact>]
+let ``GetPath returns the value at an existing path`` () =
+    let doc = YamlValue.Parse "services:\n  web:\n    image: nginx\n"
+    Assert.Equal(YamlValue.String "nginx", doc.GetPath("services.web.image"))
+
+[<Fact>]
+let ``GetPath raises when the path does not exist`` () =
+    let doc = YamlValue.Parse "a: 1\n"
+    Assert.Throws<Exception>(fun () -> doc.GetPath("b.c") |> ignore) |> ignore
+
+[<Fact>]
+let ``GetPath raises on a malformed DSL string`` () =
+    let doc = YamlValue.Parse "a: 1\n"
+    Assert.Throws<FormatException>(fun () -> doc.GetPath("a[") |> ignore) |> ignore
