@@ -1,4 +1,4 @@
-module FSharp.Data.Yaml.Tests.EmitterTests
+module FSharp.Data.YamlValue.Tests.EmitterTests
 
 open Xunit
 open FSharp.Data

@@ -64,18 +64,18 @@ for s in info?siblings do printfn "%s" (s.AsString())
 fsharp-yaml/
   .gitignore                       (dotnet new gitignore)
   Directory.Build.props            shared TFMs, LangVersion, warnaserror, nullable
-  FSharp.Data.Yaml.sln
+  FSharp.Data.YamlValue.sln
   README.md
-  src/FSharp.Data.Yaml/
-    FSharp.Data.Yaml.fsproj        netstandard2.0;net8.0 — no PackageReferences
+  src/FSharp.Data.YamlValue/
+    FSharp.Data.YamlValue.fsproj        netstandard2.0;net8.0 — no PackageReferences
     YamlValue.fs                   DU, save options, paths, comments, exception
     YamlReader.fs                  char cursor: line/col, indent, lookahead
     YamlScalar.fs                  core-schema plain-scalar resolution
     YamlParser.fs                  recursive-descent block + flow parser
     YamlEmitter.fs                 WriteTo / ToString
     YamlExtensions.fs              As* accessors, `?`, indexers, enumerator
-  tests/FSharp.Data.Yaml.Tests/
-    FSharp.Data.Yaml.Tests.fsproj  xunit + FsCheck.Xunit
+  tests/FSharp.Data.YamlValue.Tests/
+    FSharp.Data.YamlValue.Tests.fsproj  xunit + FsCheck.Xunit
     ScalarTests.fs  FlowTests.fs  BlockTests.fs  BlockScalarTests.fs
     AnchorTests.fs  DocumentTests.fs  CommentTests.fs
     EmitterTests.fs  RoundTripTests.fs  ConformanceTests.fs
@@ -192,4 +192,4 @@ Manual smoke test at the end — parse a real-world file (a `docker-compose.yml`
 
 ## Resolved item
 
-**Package name.** `FSharp.Data.Yaml` is taken on NuGet (v1.0.0, ~615 downloads). The *namespace* `FSharp.Data` remains the right home for API familiarity; the shipped package id is `FSharp.Data.YamlValue` (set via `<PackageId>` in `src/FSharp.Data.Yaml/FSharp.Data.Yaml.fsproj`), named after the type it exports. The repo/project/assembly names stay `FSharp.Data.Yaml` — only the published NuGet package id differs.
+**Package name.** `FSharp.Data.YamlValue` is taken on NuGet (v1.0.0, ~615 downloads). The *namespace* `FSharp.Data` remains the right home for API familiarity; the shipped package id is `FSharp.Data.YamlValue` (set via `<PackageId>` in `src/FSharp.Data.YamlValue/FSharp.Data.YamlValue.fsproj`), named after the type it exports. The repo/project/assembly names stay `FSharp.Data.YamlValue` — only the published NuGet package id differs.

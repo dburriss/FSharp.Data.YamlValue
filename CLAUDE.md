@@ -12,7 +12,7 @@ authoritative source for scope, layout, and phase ordering, and this file assume
 
 ## What this project is
 
-`FSharp.Data.Yaml` gives YAML the same untyped, ergonomic document API that `FSharp.Data`'s
+`FSharp.Data.YamlValue` gives YAML the same untyped, ergonomic document API that `FSharp.Data`'s
 `JsonValue` gives JSON: a discriminated union (`YamlValue`) you pattern match on, `Parse`/`Load`,
 a `?` dynamic operator, `AsInteger()`-style accessors, and a round-tripping `ToString()`. The
 parser is **hand-written with zero dependencies** (no YamlDotNet, Fable-friendly) and additionally
@@ -34,14 +34,14 @@ dotnet test --filter FullyQualifiedName~ScalarTests   # a single test class, as 
 ## Architecture (per the plan)
 
 ```
-src/FSharp.Data.Yaml/
+src/FSharp.Data.YamlValue/
   YamlValue.fs        DU, YamlSaveOptions, YamlPath/YamlNodeComments, YamlParseException, _Print
   YamlReader.fs        char cursor: line/col tracking, indentation measurement, lookahead
   YamlScalar.fs        core-schema plain-scalar resolution + quoted-scalar unescaping
   YamlParser.fs        recursive-descent parser: flow, then block, then block/multi-line scalars
   YamlEmitter.fs       WriteTo / ToString, quoting rules, block vs. flow style
   YamlExtensions.fs    As* accessors, `?` operator, indexers, GetEnumerator
-tests/FSharp.Data.Yaml.Tests/
+tests/FSharp.Data.YamlValue.Tests/
   *Tests.fs            one file per concern (Scalar, Flow, Block, BlockScalar, Anchor, Document,
                         Comment, Emitter, RoundTrip, Conformance)
   data/                 curated yaml-test-suite cases (yaml input + expected json output)

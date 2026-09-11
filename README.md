@@ -1,4 +1,4 @@
-# FSharp.Data.Yaml
+# FSharp.Data.YamlValue
 
 A YAML document API for F#, in the shape of [`FSharp.Data`'s `JsonValue`](https://fsprojects.github.io/FSharp.Data/library/JsonValue.html).
 
@@ -221,7 +221,7 @@ that returns a new `YamlValue` rather than mutating in place, with a string-path
 reads and edits:
 
 ```fsharp
-open FSharp.Data.Yaml.Builders
+open FSharp.Data.YamlValueBuilders
 
 let doc = YamlValue.Parse """
 name: myapp
@@ -244,9 +244,27 @@ let image = updated.TryGetPath("services.web.image") // Some (YamlValue.String "
 sequence with `YamlValue.Null` when the index is beyond its current length. `RemovePath` is a
 no-op when the path doesn't exist, and splices sequence elements out rather than leaving a
 `Null` hole. `TryGetPath` returns `None` (and `GetPath` raises) the moment any step of the path
-can't be followed. See `docs/reference.md` for the full API, including the `YamlPath` fluent
-builder for non-string keys — useful from C#, where DU cases are less natural to construct
-directly.
+can't be followed.
+
+**The string-path DSL.** Dot-separated segments address mapping keys, `[n]` addresses a sequence
+index, and a segment containing a literal `.`, `[` or `]` is bracket-quoted:
+
+```fsharp
+doc.SetPath("services.web.ports[0]", YamlValue.Number 8080M)
+doc.GetPath("""config["a.b"]""")   // a literal '.' inside the key needs bracket-quoting
+```
+
+The DSL only expresses string-keyed mapping steps — non-string keys need the `YamlPath` fluent
+builder instead, via its `Key(YamlValue)` overload:
+
+```fsharp
+let path = YamlPath.Root.Key("services").Key("web").Index(0)
+doc.SetPath(path, YamlValue.String "nginx:1.27")
+```
+
+See `docs/reference.md` for the full API, and [`examples/string-path-dsl.fsx`](examples/string-path-dsl.fsx)
+for a runnable walkthrough of auto-vivification, bracket-quoting, `overwriteScalars`, and the
+`YamlPath` builder.
 
 ### Comments
 
@@ -339,6 +357,8 @@ operator and the whole `As*` accessor family — matches `JsonValue` name for na
 ## Documentation
 
 Full API reference: [`docs/reference.md`](docs/reference.md).
+
+Runnable, self-contained scripts for every feature above: [`examples/`](examples/).
 
 ## License
 

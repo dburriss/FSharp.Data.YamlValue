@@ -1,6 +1,6 @@
 #load "load-library.fsx"
 open FSharp.Data
-open FSharp.Data.Yaml.Builders
+open FSharp.Data.YamlValueBuilders
 open FSharp.Data.YamlExtensions
 
 // The string-path DSL used by SetPath/RemovePath: dot-separated segments address

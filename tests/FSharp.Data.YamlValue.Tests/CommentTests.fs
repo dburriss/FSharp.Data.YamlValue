@@ -1,4 +1,4 @@
-module FSharp.Data.Yaml.Tests.CommentTests
+module FSharp.Data.YamlValue.Tests.CommentTests
 
 open Xunit
 open FSharp.Data

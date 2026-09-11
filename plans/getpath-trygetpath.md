@@ -15,7 +15,7 @@ fluent `YamlPath` builder.
 ## Design
 
 Add four new members to the existing `YamlValue with` block in
-`src/FSharp.Data.Yaml/YamlBuilders.fs` (right after `RemovePath`, before the closing of the
+`src/FSharp.Data.YamlValue/YamlBuilders.fs` (right after `RemovePath`, before the closing of the
 `type YamlValue with` block), reusing `YamlPath` / `YamlPathDsl.parse` already defined earlier in
 that file:
 
@@ -66,8 +66,8 @@ Notes matching existing conventions:
 
 ## Files to change
 
-- `src/FSharp.Data.Yaml/YamlBuilders.fs` — add the four members above.
-- `tests/FSharp.Data.Yaml.Tests/BuilderTests.fs` — add a `GetPath`/`TryGetPath` test section
+- `src/FSharp.Data.YamlValue/YamlBuilders.fs` — add the four members above.
+- `tests/FSharp.Data.YamlValue.Tests/BuilderTests.fs` — add a `GetPath`/`TryGetPath` test section
   alongside the existing `SetPath`/`RemovePath` tests (lines ~145–258), covering: found nested
   key, found nested index, missing key → `None`, out-of-range index → `None`, descending through
   a scalar → `None`, string-DSL parity with `YamlPath` builder, `GetPath` throwing on missing

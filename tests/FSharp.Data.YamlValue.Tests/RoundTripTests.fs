@@ -1,4 +1,4 @@
-module FSharp.Data.Yaml.Tests.RoundTripTests
+module FSharp.Data.YamlValue.Tests.RoundTripTests
 
 open System
 open System.Globalization

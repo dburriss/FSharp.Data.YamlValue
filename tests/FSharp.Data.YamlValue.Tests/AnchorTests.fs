@@ -1,4 +1,4 @@
-module FSharp.Data.Yaml.Tests.AnchorTests
+module FSharp.Data.YamlValue.Tests.AnchorTests
 
 open System
 open Xunit

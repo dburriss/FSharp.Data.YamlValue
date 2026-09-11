@@ -1,4 +1,4 @@
-module FSharp.Data.Yaml.Tests.YamlReaderTests
+module FSharp.Data.YamlValue.Tests.YamlReaderTests
 
 open Xunit
 open FSharp.Data

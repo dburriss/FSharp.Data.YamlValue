@@ -5,11 +5,11 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Data.Yaml", "src\FSharp.Data.Yaml\FSharp.Data.Yaml.fsproj", "{8D6A2C1F-7ED8-42F6-9B05-484E11AD9465}"
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Data.YamlValue", "src\FSharp.Data.YamlValue\FSharp.Data.YamlValue.fsproj", "{8D6A2C1F-7ED8-42F6-9B05-484E11AD9465}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Data.Yaml.Tests", "tests\FSharp.Data.Yaml.Tests\FSharp.Data.Yaml.Tests.fsproj", "{CCA914C3-17A2-47AB-9A63-588A9432C9A8}"
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Data.YamlValue.Tests", "tests\FSharp.Data.YamlValue.Tests\FSharp.Data.YamlValue.Tests.fsproj", "{CCA914C3-17A2-47AB-9A63-588A9432C9A8}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

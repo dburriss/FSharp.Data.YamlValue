@@ -1,10 +1,10 @@
-module FSharp.Data.Yaml.Tests.BuilderTests
+module FSharp.Data.YamlValue.Tests.BuilderTests
 
 open System
 open Xunit
 open FSharp.Data
 open FSharp.Data.YamlExtensions
-open FSharp.Data.Yaml.Builders
+open FSharp.Data.YamlValueBuilders
 
 // ---------------------------------------------------------------------
 // YamlPath fluent builder

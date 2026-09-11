@@ -42,7 +42,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../src/FSharp.Data.Yaml/FSharp.Data.Yaml.fsproj" />
+    <ProjectReference Include="../../src/FSharp.Data.YamlValue/FSharp.Data.YamlValue.fsproj" />
   </ItemGroup>
 
 </Project>

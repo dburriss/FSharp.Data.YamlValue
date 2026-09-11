@@ -1,4 +1,4 @@
-module FSharp.Data.Yaml.Tests.ConformanceTests
+module FSharp.Data.YamlValue.Tests.ConformanceTests
 
 // Curated conformance suite, per Phase 11 of plans/yamlvalue-parser.md — a hand-authored
 // substitute for github.com/yaml/yaml-test-suite (no network access available here), covering

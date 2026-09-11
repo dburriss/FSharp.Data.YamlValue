@@ -1,4 +1,4 @@
-module FSharp.Data.Yaml.Tests.DocumentTests
+module FSharp.Data.YamlValue.Tests.DocumentTests
 
 open System
 open System.IO

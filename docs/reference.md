@@ -14,7 +14,7 @@
 ## YamlValue
 
 **Namespace:** `FSharp.Data`
-**Assembly:** `FSharp.Data.Yaml.dll`
+**Assembly:** `FSharp.Data.YamlValue.dll`
 
 Represents a YAML node. The type is `[<RequireQualifiedAccess>]`, so cases are written
 `YamlValue.String`, `YamlValue.Mapping`, and so on.
@@ -222,14 +222,14 @@ info?name?first
 
 ## YamlBuilders
 
-**Namespace:** `FSharp.Data.Yaml.Builders`
+**Namespace:** `FSharp.Data.YamlValueBuilders`
 
 `YamlValue` has no write API of its own — like `JsonValue`, it's immutable. `YamlBuilders` is an
 opt-in construction/editing API, kept in its own namespace and file (`YamlBuilders.fs`) separate
 from the read-only `YamlExtensions`. Every member returns a **new** `YamlValue`; none mutate `this`.
 
 ```fsharp
-open FSharp.Data.Yaml.Builders
+open FSharp.Data.YamlValueBuilders
 ```
 
 ### `YamlValue` extension members
@@ -271,7 +271,7 @@ path string raises `System.FormatException`.
 
 ### `YamlPath`
 
-**Namespace:** `FSharp.Data.Yaml.Builders`
+**Namespace:** `FSharp.Data.YamlValueBuilders`
 
 A fluent builder for a `YamlPathStep list` (the same root-first path type used by
 `YamlDocument.Comments`), aimed at callers — particularly from C# — for whom constructing

@@ -3,5 +3,5 @@
 // directly (see `ScalarTests.fs`, `YamlReaderTests.fs`), so it is declared a friend assembly.
 module internal FSharp.Data.AssemblyInfo
 
-[<assembly: System.Runtime.CompilerServices.InternalsVisibleTo("FSharp.Data.Yaml.Tests")>]
+[<assembly: System.Runtime.CompilerServices.InternalsVisibleTo("FSharp.Data.YamlValue.Tests")>]
 do ()

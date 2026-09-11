@@ -1,6 +1,6 @@
 # Examples
 
-Runnable F# scripts (`.fsx`) that exercise `FSharp.Data.Yaml`, alongside the `.yml`
+Runnable F# scripts (`.fsx`) that exercise `FSharp.Data.YamlValue`, alongside the `.yml`
 files they load. Good for playing with the API in F# Interactive.
 
 ## Running
@@ -8,7 +8,7 @@ files they load. Good for playing with the API in F# Interactive.
 Build the library once, then run any script with `dotnet fsi`:
 
 ```bash
-dotnet build src/FSharp.Data.Yaml/FSharp.Data.Yaml.fsproj
+dotnet build src/FSharp.Data.YamlValue/FSharp.Data.YamlValue.fsproj
 dotnet fsi examples/quickstart.fsx
 ```
 

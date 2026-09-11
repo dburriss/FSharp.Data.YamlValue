@@ -27,7 +27,7 @@ New namespace/file, kept separate from `YamlExtensions.fs` so the read-only, pat
 core stays as-is and this is purely opt-in:
 
 ```fsharp
-namespace FSharp.Data.Yaml.Builders
+namespace FSharp.Data.YamlValueBuilders
 
 open FSharp.Data
 
@@ -40,7 +40,7 @@ type YamlPath =
     member Key   : name: string -> YamlPath
     member Key   : key: YamlValue -> YamlPath      // non-string keys
     member Index : index: int -> YamlPath
-    member Steps : FSharp.Data.YamlPathStep list    // underlying root-first step list
+    member Steps : FSharp.Data.YamlValuePathStep list    // underlying root-first step list
 
 [<Extension>]
 type YamlBuilderExtensions =
@@ -61,7 +61,7 @@ Usage:
 
 ```fsharp
 open FSharp.Data
-open FSharp.Data.Yaml.Builders
+open FSharp.Data.YamlValueBuilders
 
 let doc = YamlValue.Parse """
 name: myapp
@@ -85,7 +85,7 @@ let withIntKey =
 
 ```csharp
 using FSharp.Data;
-using FSharp.Data.Yaml.Builders;
+using FSharp.Data.YamlValueBuilders;
 
 var updated = doc
     .SetProperty("name", YamlValue.NewString("myapp2"))
@@ -103,8 +103,8 @@ var withIntKey = doc.SetPath(YamlPath.Root.Key("services").Index(0), YamlValue.N
 `YamlExtensions.fs` is the read-only, "know what this document looks like" half of the API
 (`docs/reference.md`). Mutation-flavored construction is a distinct concern users should opt into
 explicitly — mirrors the existing precedent of keeping comments out of `YamlValue` and into a
-separate `YamlDocument` side structure. New file: `src/FSharp.Data.Yaml/YamlBuilders.fs`,
-namespace `FSharp.Data.Yaml.Builders`.
+separate `YamlDocument` side structure. New file: `src/FSharp.Data.YamlValue/YamlBuilders.fs`,
+namespace `FSharp.Data.YamlValueBuilders`.
 
 ### String-path DSL is the primary API, not the `YamlPathStep` DU
 
@@ -153,10 +153,10 @@ Deletion is the inverse of the above, but not symmetric everywhere:
 ## Layout
 
 ```
-src/FSharp.Data.Yaml/
+src/FSharp.Data.YamlValue/
   YamlBuilders.fs        YamlPath fluent builder, DSL parser, SetProperty/RemoveProperty,
                           SetPath/RemovePath (string-path and YamlPath overloads)
-tests/FSharp.Data.Yaml.Tests/
+tests/FSharp.Data.YamlValue.Tests/
   BuilderTests.fs         SetProperty/RemoveProperty, DSL parsing + escaping, auto-vivify,
                           padding, overwriteScalars, RemovePath no-op/splice/no-prune
 ```

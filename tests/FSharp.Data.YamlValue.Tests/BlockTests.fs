@@ -1,4 +1,4 @@
-module FSharp.Data.Yaml.Tests.BlockTests
+module FSharp.Data.YamlValue.Tests.BlockTests
 
 open System
 open Xunit

@@ -5,8 +5,8 @@
 /// and the split lets callers opt into it explicitly.
 ///
 /// These members only become visible on `YamlValue` once this module is opened:
-/// `open FSharp.Data.Yaml.Builders`.
-module FSharp.Data.Yaml.Builders
+/// `open FSharp.Data.YamlValueBuilders`.
+module FSharp.Data.YamlValueBuilders
 
 open System
 open FSharp.Data
