@@ -5,14 +5,6 @@ A YAML document API for F#, in the shape of [`FSharp.Data`'s `JsonValue`](https:
 Parse YAML into a discriminated union you can pattern match, navigate with the `?` dynamic
 operator, read with `AsInteger()`-style accessors, and write back out — including comments.
 
-**Zero dependencies.** The parser is hand-written, so the package pulls in nothing but FSharp.Core.
-
-> **Status: feature-complete.** All phases of [`plans/yamlvalue-parser.md`](plans/yamlvalue-parser.md)
-> are implemented — flow and block parsing, all scalar types, block/multi-line scalars,
-> anchors/aliases/merge keys, multi-document streams and directives, comment capture via
-> `YamlDocument`, the emitter, and the `As*`/`?` extension API. Every example below runs against
-> the current implementation.
-
 ## Supported features
 
 - **Flow and block YAML**, arbitrarily nested — `{...}`/`[...]` flow collections and indentation-based
