@@ -4,11 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-**Pre-implementation.** This repository currently contains only `README.md`, `docs/reference.md`
-(the target API reference), and `plans/yamlvalue-parser.md` (the phased build plan). There is no
-`.sln`, no `src/`, no `tests/`, and no git history yet — `git init` has not been run. Read
-`plans/yamlvalue-parser.md` in full before starting any implementation work; it is the
-authoritative source for scope, layout, and phase ordering, and this file assumes its plan.
+Feature parity with FSharp.Data.Json with additional DSL for GetPath and SetPath.
 
 ## What this project is
 
