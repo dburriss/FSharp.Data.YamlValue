@@ -5,6 +5,8 @@
     <IsPackable>true</IsPackable>
     <PackageId>FSharp.Data.YamlValue</PackageId>
     <Description>An FSharp.Data-style, dependency-free YAML document API: a discriminated union DU you can pattern match, Parse/Load, a `?` dynamic operator and AsInteger()-style accessors.</Description>
+    <Version>0.1.0</Version>
+    <PackageReleaseNotes></PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>
