@@ -6,8 +6,23 @@
     <PackageId>FSharp.Data.YamlValue</PackageId>
     <Description>An FSharp.Data-style, dependency-free YAML document API: a discriminated union DU you can pattern match, Parse/Load, a `?` dynamic operator and AsInteger()-style accessors.</Description>
     <Version>0.1.0</Version>
+    <Authors>Devon Burriss</Authors>
+    <Title>FSharp.Data.YamlValue</Title>
+    <Copyright>Copyright © 2026 Devon Burriss</Copyright>
+    <PackageProjectUrl>https://github.com/dburriss/FSharp.Data.YamlValue</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/dburriss/FSharp.Data.YamlValue</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>fsharp yaml parser serializer</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageReleaseNotes></PackageReleaseNotes>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
 
   <ItemGroup>
     <Compile Include="YamlValue.fs" />
