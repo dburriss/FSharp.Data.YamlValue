@@ -1,11 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
     <IsPackable>true</IsPackable>
     <PackageId>FSharp.Data.YamlValue</PackageId>
     <Description>An FSharp.Data-style, dependency-free YAML document API: a discriminated union DU you can pattern match, Parse/Load, a `?` dynamic operator and AsInteger()-style accessors.</Description>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Authors>Devon Burriss</Authors>
     <Title>FSharp.Data.YamlValue</Title>
     <Copyright>Copyright © 2026 Devon Burriss</Copyright>
@@ -15,16 +15,15 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>fsharp yaml parser serializer</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes></PackageReleaseNotes>
+    <PackageReleaseNotes>Replaced `sprintf`/`printf` usage across the parser, emitter, and path DSL with plain string concatenation. F#'s printf machinery builds format functions via reflection, which crashed under NativeAOT on any malformed YAML input (or on `ToString()`/`_Print`); the library is now verified to work in a NativeAOT-published app.
+`IsAotCompatible` set on the library project.</PackageReleaseNotes>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
-
   <ItemGroup>
-    <None Include="..\..\NUGET.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
-
   <ItemGroup>
     <Compile Include="YamlValue.fs" />
     <Compile Include="YamlReader.fs" />
@@ -35,5 +34,4 @@
     <Compile Include="YamlBuilders.fs" />
     <Compile Include="AssemblyInfo.fs" />
   </ItemGroup>
-
 </Project>

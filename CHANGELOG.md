@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-12
+
 ### Fixed
 
 - Replaced `sprintf`/`printf` usage across the parser, emitter, and path DSL with plain string concatenation. F#'s printf machinery builds format functions via reflection, which crashed under NativeAOT on any malformed YAML input (or on `ToString()`/`_Print`); the library is now verified to work in a NativeAOT-published app.
