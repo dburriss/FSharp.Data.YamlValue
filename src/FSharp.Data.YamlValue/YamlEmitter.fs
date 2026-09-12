@@ -116,7 +116,7 @@ module internal YamlEmitter =
             | '\f' -> sb.Append("\\f") |> ignore
             | '\r' -> sb.Append("\\r") |> ignore
             | '\u001B' -> sb.Append("\\e") |> ignore
-            | c when Char.IsControl c -> sb.Append(sprintf "\\x%02X" (int c)) |> ignore
+            | c when Char.IsControl c -> sb.Append("\\x").Append((int c).ToString("X2")) |> ignore
             | c -> sb.Append(c) |> ignore
         sb.ToString()
 
@@ -258,13 +258,13 @@ module internal YamlEmitter =
         if ctx.Budget.Value > NodeBudget then
             raise (
                 YamlEmitBudgetExceededException(
-                    sprintf
-                        "Emitting this value exceeded the node budget of %d nodes. This usually \
-                         means the value contains a pathological shared-reference structure (an \
-                         anchor/alias graph resolved at parse time into shared subtrees, walked \
-                         here as if each occurrence were separate content) rather than being a \
-                         legitimately huge document."
-                        NodeBudget
+                    "Emitting this value exceeded the node budget of "
+                    + string NodeBudget
+                    + " nodes. This usually \
+                       means the value contains a pathological shared-reference structure (an \
+                       anchor/alias graph resolved at parse time into shared subtrees, walked \
+                       here as if each occurrence were separate content) rather than being a \
+                       legitimately huge document."
                 )
             )
 

@@ -190,10 +190,10 @@ module internal YamlParser =
     /// ready" state is needed.
     let private resolveAlias (cur: Cursor) (state: ParseState) (name: string) : YamlValue =
         if state.IsInFlight name then
-            raise (cur.Error(sprintf "Recursive alias '*%s' refers to an anchor still being constructed" name))
+            raise (cur.Error("Recursive alias '*" + name + "' refers to an anchor still being constructed"))
         match state.TryGetAnchor name with
         | Some v -> v
-        | None -> raise (cur.Error(sprintf "Unknown anchor '*%s'" name))
+        | None -> raise (cur.Error("Unknown anchor '*" + name + "'"))
 
     /// Applies a core-schema tag's forced resolution to a scalar's *raw* (unresolved) text —
     /// called instead of `resolvePlainScalar` so that e.g. `!!str 123` yields `String "123"`
@@ -207,21 +207,21 @@ module internal YamlParser =
             match rawText with
             | "true" | "True" | "TRUE" -> YamlValue.Boolean true
             | "false" | "False" | "FALSE" -> YamlValue.Boolean false
-            | _ -> raise (cur.Error(sprintf "Invalid value '%s' for tag !!bool" rawText))
+            | _ -> raise (cur.Error("Invalid value '" + rawText + "' for tag !!bool"))
         | "!!int" ->
             match System.Decimal.TryParse(
                       rawText,
                       System.Globalization.NumberStyles.AllowLeadingSign,
                       System.Globalization.CultureInfo.InvariantCulture) with
             | true, d -> YamlValue.Number d
-            | false, _ -> raise (cur.Error(sprintf "Invalid value '%s' for tag !!int" rawText))
+            | false, _ -> raise (cur.Error("Invalid value '" + rawText + "' for tag !!int"))
         | "!!float" ->
             match System.Double.TryParse(
                       rawText,
                       System.Globalization.NumberStyles.Float,
                       System.Globalization.CultureInfo.InvariantCulture) with
             | true, f -> YamlValue.Float f
-            | false, _ -> raise (cur.Error(sprintf "Invalid value '%s' for tag !!float" rawText))
+            | false, _ -> raise (cur.Error("Invalid value '" + rawText + "' for tag !!float"))
         | "!!timestamp" ->
             match YamlScalar.resolvePlainScalar rawText with
             | YamlValue.Timestamp _ as t -> t
@@ -231,7 +231,7 @@ module internal YamlParser =
                           System.Globalization.CultureInfo.InvariantCulture,
                           System.Globalization.DateTimeStyles.AssumeUniversal) with
                 | true, dto -> YamlValue.Timestamp dto
-                | false, _ -> raise (cur.Error(sprintf "Invalid value '%s' for tag !!timestamp" rawText))
+                | false, _ -> raise (cur.Error("Invalid value '" + rawText + "' for tag !!timestamp"))
         | "!!map" | "!!seq" ->
             // A shape mismatch (the tagged node turned out to be a plain scalar, not a mapping/
             // sequence) — fall back to normal resolution rather than erroring.
@@ -540,7 +540,7 @@ module internal YamlParser =
         | Some '"' -> applyTagToScalar cur tagOpt (parseDoubleQuoted cur)
         | Some ':' -> raise (cur.Error "Expected a value, found ':'")
         | Some c when isFlowIndicator c ->
-            raise (cur.Error(sprintf "Expected a value, found '%c'" c))
+            raise (cur.Error("Expected a value, found '" + string c + "'"))
         | Some _ ->
             let text = scanFlowPlainScalar cur
             match tagOpt with
@@ -1100,7 +1100,7 @@ module internal YamlParser =
              | Some sink ->
                  let text = (cur.SkipComment()).Trim()
                  if text <> "" then sink.SetTrailing(state.CurrentPath, text)
-         | Some c -> raise (cur.Error(sprintf "Invalid character '%c' in block scalar header" c)))
+         | Some c -> raise (cur.Error("Invalid character '" + string c + "' in block scalar header")))
         cur.SkipLineBreak() |> ignore
 
         let lines = ResizeArray<string option>()
@@ -1492,13 +1492,13 @@ module internal YamlParser =
             let parts = value.Split('.')
             let isDigits (s: string) = s.Length > 0 && s |> Seq.forall System.Char.IsDigit
             if parts.Length <> 2 || not (isDigits parts.[0]) || not (isDigits parts.[1]) then
-                malformed (sprintf "Malformed %%YAML directive — expected 'MAJOR.MINOR', got '%s'" value)
+                malformed ("Malformed %YAML directive — expected 'MAJOR.MINOR', got '" + value + "'")
         | "TAG" ->
             let parts = value.Split([| ' '; '\t' |], 2)
             let handleOk (h: string) =
                 h = "!" || h = "!!" || (h.Length >= 2 && h.StartsWith "!" && h.EndsWith "!")
             if parts.Length <> 2 || not (handleOk parts.[0]) || parts.[1].Trim() = "" then
-                malformed (sprintf "Malformed %%TAG directive — expected '<handle> <prefix>', got '%s'" value)
+                malformed ("Malformed %TAG directive — expected '<handle> <prefix>', got '" + value + "'")
         | _ -> ()
         cur.SkipBlanksAndComment()
         cur.SkipLineBreak() |> ignore
@@ -1547,7 +1547,7 @@ module internal YamlParser =
                     if not (tagHandles.Add handle) then
                         raise (
                             YamlParseException(
-                                sprintf "Duplicate %%TAG directive for handle '%s'" handle,
+                                "Duplicate %TAG directive for handle '" + handle + "'",
                                 cur.Source,
                                 linePos.Line,
                                 linePos.Column

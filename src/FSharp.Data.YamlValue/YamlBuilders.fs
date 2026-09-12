@@ -47,7 +47,7 @@ type YamlPath private (steps: YamlPathStep list) =
 module internal YamlPathDsl =
 
     let private fail (path: string) (pos: int) (message: string) : 'a =
-        raise (FormatException(sprintf "Malformed YAML path '%s' at position %d: %s" path pos message))
+        raise (FormatException("Malformed YAML path '" + path + "' at position " + string pos + ": " + message))
 
     /// Reads a bare (unquoted) key segment starting at `pos`, up to the next `.`, `[`, or the end
     /// of the string.
@@ -92,7 +92,7 @@ module internal YamlPathDsl =
             let digits = path.Substring(inner, i - inner)
             match Int32.TryParse(digits, Globalization.NumberStyles.Integer, Globalization.CultureInfo.InvariantCulture) with
             | true, n when n >= 0 -> Index n, i + 1
-            | _ -> fail path inner (sprintf "expected a non-negative index, got '%s'" digits)
+            | _ -> fail path inner ("expected a non-negative index, got '" + digits + "'")
 
     let parse (path: string) : YamlPathStep list =
         if String.IsNullOrEmpty path then

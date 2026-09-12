@@ -41,7 +41,7 @@ type YamlValue =
     member private this._Print =
         let rec print (v: YamlValue) =
             match v with
-            | YamlValue.String s -> sprintf "\"%s\"" s
+            | YamlValue.String s -> "\"" + s + "\""
             | YamlValue.Number n -> string n
             | YamlValue.Float f -> string f
             | YamlValue.Boolean b -> if b then "true" else "false"
@@ -49,13 +49,13 @@ type YamlValue =
             | YamlValue.Null -> "null"
             | YamlValue.Sequence elements ->
                 let items = elements |> Array.map print |> String.concat "; "
-                sprintf "[%s]" items
+                "[" + items + "]"
             | YamlValue.Mapping properties ->
                 let items =
                     properties
-                    |> Array.map (fun (k, v) -> sprintf "%s: %s" (print k) (print v))
+                    |> Array.map (fun (k, v) -> print k + ": " + print v)
                     |> String.concat "; "
-                sprintf "{%s}" items
+                "{" + items + "}"
         print this
 
 /// A single step in a path from the document root down to a node — either a mapping key or a
@@ -131,7 +131,7 @@ module internal YamlParseSnippet =
 /// Raised by `Parse`, `ParseMultiple`, `Load` and `AsyncLoad` on malformed YAML input.
 type YamlParseException(message: string, line: int, column: int, snippet: string) =
     inherit Exception(
-        sprintf "%s at line %d, column %d\n%s" message line column snippet)
+        message + " at line " + string line + ", column " + string column + "\n" + snippet)
 
     /// 1-based line number where parsing failed.
     member _.Line = line

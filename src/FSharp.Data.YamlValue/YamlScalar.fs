@@ -226,12 +226,12 @@ module internal YamlScalar =
                 fail escapeStart "Truncated hex escape sequence"
             let hex = content.Substring(escapeStart, digitCount)
             if not (hex |> Seq.forall Uri.IsHexDigit) then
-                fail escapeStart (sprintf "Invalid hex escape sequence '%s'" hex)
+                fail escapeStart ("Invalid hex escape sequence '" + hex + "'")
             let codepoint = Convert.ToInt32(hex, 16)
             try
                 sb.Append(Char.ConvertFromUtf32 codepoint) |> ignore
             with :? ArgumentOutOfRangeException ->
-                fail escapeStart (sprintf "Invalid Unicode code point U+%X" codepoint)
+                fail escapeStart ("Invalid Unicode code point U+" + codepoint.ToString("X"))
             i <- escapeStart + digitCount
 
         while i < len do
@@ -271,6 +271,6 @@ module internal YamlScalar =
                     if i < len && content.[i] = '\n' then i <- i + 1
                     while i < len && (content.[i] = ' ' || content.[i] = '\t') do
                         i <- i + 1
-                | other -> fail i (sprintf "Invalid escape sequence '\\%c'" other)
+                | other -> fail i ("Invalid escape sequence '\\" + string other + "'")
 
         sb.ToString()
