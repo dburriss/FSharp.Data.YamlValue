@@ -52,6 +52,11 @@ let ``Null emits as the literal null`` () =
 // Quoting-rule triggers (block style)
 // ---------------------------------------------------------------------
 
+let private prop (name: string) (v: YamlValue) =
+    match v with
+    | YamlValue.Mapping pairs -> pairs |> Array.find (fun (k, _) -> k = YamlValue.String name) |> snd
+    | _ -> failwith "not a mapping"
+
 let private roundTripsAsString (text: string) =
     let v = YamlValue.String text
     let emitted = v.ToString(YamlSaveOptions.None)
@@ -375,3 +380,45 @@ let ``emitting a pathological shared-reference structure raises the budget excep
 
     Assert.Throws<YamlEmitBudgetExceededException>(fun () -> big.ToString(YamlSaveOptions.None) |> ignore)
     |> ignore
+
+// ---------------------------------------------------------------------
+// "<<" must not be re-read as a merge key
+// ---------------------------------------------------------------------
+
+let private roundTrip (v: YamlValue) (opts: YamlSaveOptions) =
+    YamlValue.Parse(v.ToString(opts))
+
+[<Fact>]
+let ``the string "<<" is quoted on emit`` () =
+    Assert.Equal("'<<'\n", YamlValue.String("<<").ToString(YamlSaveOptions.None))
+
+[<Theory>]
+[<InlineData(0)>]
+[<InlineData(2)>]
+let ``a "<<" mapping key round-trips and is not merged`` (opts: int) =
+    let opts = enum<YamlSaveOptions> opts
+    let v =
+        YamlValue.Mapping [| YamlValue.String "<<", YamlValue.Mapping [| YamlValue.String "a", YamlValue.Number 1m |]
+                             YamlValue.String "b", YamlValue.Number 2m |]
+    Assert.Equal(v, roundTrip v opts)
+
+[<Fact>]
+let ``a "<<" string value round-trips`` () =
+    let v = YamlValue.Mapping [| YamlValue.String "k", YamlValue.String "<<" |]
+    Assert.Equal(v, roundTrip v YamlSaveOptions.None)
+    Assert.Equal(v, roundTrip v YamlSaveOptions.Flow)
+
+[<Fact>]
+let ``a quoted "<<" key in source is a literal key, not a merge key`` () =
+    let doc = "base: &b {a: 1}\nd:\n  \"<<\": *b\n  x: 2\nf: {'<<': *b}\n"
+    let r = YamlValue.Parse doc
+    Assert.Equal(YamlValue.Mapping [| YamlValue.String "<<", YamlValue.Mapping [| YamlValue.String "a", YamlValue.Number 1m |]
+                                      YamlValue.String "x", YamlValue.Number 2m |], prop "d" r)
+    match prop "f" r with
+    | YamlValue.Mapping pairs -> Assert.Equal(1, pairs.Length)
+    | other -> failwithf "expected mapping, got %A" other
+
+[<Fact>]
+let ``a real "<<" merge key still merges`` () =
+    let r = YamlValue.Parse "base: &b {a: 1}\nd:\n  <<: *b\n  x: 2\n"
+    Assert.Equal(YamlValue.Number 1m, prop "a" (prop "d" r))

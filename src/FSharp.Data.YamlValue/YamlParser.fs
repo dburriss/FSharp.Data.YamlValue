@@ -252,12 +252,19 @@ module internal YamlParser =
     /// included (there may be more than one, and a `<<` value may itself be a mapping or a
     /// sequence of mappings, e.g. `<<: [*a, *b]`). Precedence: an explicit key always wins over a
     /// merged-in one; among merge sources, an earlier one wins over a later one.
-    let private applyMergeKeys (items: ResizeArray<YamlValue * YamlValue>) : (YamlValue * YamlValue)[] =
+    ///
+    /// `quotedKeys` holds the indexes (into `items`) of keys written as quoted scalars: a quoted
+    /// `"<<"` is a literal string key, not a merge key (only the plain `<<` is).
+    let private applyMergeKeys
+        (items: ResizeArray<YamlValue * YamlValue>)
+        (quotedKeys: HashSet<int>)
+        : (YamlValue * YamlValue)[] =
         let mergeKey = YamlValue.String "<<"
         let explicitPairs = ResizeArray<YamlValue * YamlValue>()
         let mergeSources = ResizeArray<YamlValue>()
-        for (k, v) in items do
-            if k = mergeKey then mergeSources.Add v
+        for idx in 0 .. items.Count - 1 do
+            let (k, v) = items.[idx]
+            if k = mergeKey && not (quotedKeys.Contains idx) then mergeSources.Add v
             else explicitPairs.Add((k, v))
         if mergeSources.Count = 0 then
             explicitPairs.ToArray()
@@ -573,6 +580,7 @@ module internal YamlParser =
         let openPos = cur.Position
         cur.Advance() // opening {
         let items = ResizeArray<YamlValue * YamlValue>()
+        let quotedKeys = HashSet<int>()
         skipFlowWhitespace cur
         if cur.Peek() = Some '}' then
             cur.Advance()
@@ -581,6 +589,8 @@ module internal YamlParser =
             while more do
                 if cur.IsEof then
                     raise (cur.ErrorAt("Unclosed flow mapping — missing '}'", openPos.Line, openPos.Column))
+                if (match cur.Peek() with Some ('"' | '\'') -> true | _ -> false) then
+                    quotedKeys.Add items.Count |> ignore
                 let key = parseFlowNode cur state
                 skipFlowWhitespace cur
                 let value =
@@ -605,7 +615,7 @@ module internal YamlParser =
                     cur.Advance()
                     more <- false
                 | _ -> raise (cur.Error "Expected ',' or '}' in flow mapping")
-        let finalItems = if state.MergeKeysEnabled then applyMergeKeys items else items.ToArray()
+        let finalItems = if state.MergeKeysEnabled then applyMergeKeys items quotedKeys else items.ToArray()
         YamlValue.Mapping finalItems
 
     /// Parses a flow sequence, cursor positioned at the opening `[`. Supports trailing commas
@@ -1364,6 +1374,7 @@ module internal YamlParser =
     /// an entry's value is attached there too as its trailing comment.
     and private parseBlockMapping (cur: Cursor) (indent: int) (state: ParseState) : YamlValue =
         let items = ResizeArray<YamlValue * YamlValue>()
+        let quotedKeys = HashSet<int>()
         let mutable continueLoop = true
         let mutable isFirst = true
         while continueLoop do
@@ -1400,6 +1411,8 @@ module internal YamlParser =
                 cur.Advance() // consume '?'
                 let rightAfterQ = cur.Position
                 cur.SkipBlanks() |> ignore
+                if (match cur.Peek() with Some ('"' | '\'') -> true | _ -> false) then
+                    quotedKeys.Add items.Count |> ignore
                 let key =
                     match cur.Peek() with
                     | None -> YamlValue.Null
@@ -1440,6 +1453,8 @@ module internal YamlParser =
             elif looksLikeMappingEntry cur then
                 let leading = List.ofSeq state.PendingLeading
                 state.PendingLeading.Clear()
+                if (match cur.Peek() with Some ('"' | '\'') -> true | _ -> false) then
+                    quotedKeys.Add items.Count |> ignore
                 let key = parseBlockMappingKey cur
                 cur.SkipBlanks() |> ignore
                 if cur.Peek() <> Some ':' then
@@ -1452,7 +1467,7 @@ module internal YamlParser =
                 items.Add((key, value))
             else
                 raise (cur.Error "Expected a mapping entry")
-        let finalItems = if state.MergeKeysEnabled then applyMergeKeys items else items.ToArray()
+        let finalItems = if state.MergeKeysEnabled then applyMergeKeys items quotedKeys else items.ToArray()
         YamlValue.Mapping finalItems
 
     // -----------------------------------------------------------------------
