@@ -25,7 +25,7 @@ Represents a YAML node. The type is `[<RequireQualifiedAccess>]`, so cases are w
 |---|---|---|
 | `String` | `String of string` | A YAML string. Quoted and block scalars always land here. |
 | `Number` | `Number of decimal` | A YAML number stored as a decimal — integers, and floats that fit the decimal range exactly. |
-| `Float` | `Float of float` | A YAML number stored as a float, for values that do not fit in decimal, and for `.inf`, `-.inf` and `.nan`. |
+| `Float` | `Float of float` | A YAML number stored as a float, for values that do not fit in decimal, and for `.inf`, `-.inf` and `.nan`. Every finite `Float` round-trips: when plain text would read back as a `Number` (integral values, `0.5`, `-0.0`, ...) `ToString` emits an explicit tag, e.g. `!!float 1.0`, `!!float -0.0`. |
 | `Boolean` | `Boolean of bool` | A YAML boolean. Core schema only: `true`/`false` and their capitalised forms, never `yes`/`no`/`on`/`off`. |
 | `Timestamp` | `Timestamp of DateTimeOffset` | A YAML timestamp — an ISO-8601 date or date-time. Dates without a zone are read as UTC. |
 | `Mapping` | `Mapping of properties: (YamlValue * YamlValue)[]` | A YAML mapping, as an array of key-value pairs. Keys are `YamlValue` because YAML permits any node as a key; order is preserved. |
@@ -52,7 +52,7 @@ Represents a YAML node. The type is `[<RequireQualifiedAccess>]`, so cases are w
 
 | Member | Signature | Description |
 |---|---|---|
-| `Parse` | `Parse(text: string) : YamlValue` | Parses a single YAML document. Comments are discarded; use `YamlDocument.Parse` to keep them. Raises `YamlParseException` on invalid input. |
+| `Parse` | `Parse(text: string, ?disableMergeKeys: bool) : YamlValue` | Parses a single YAML document. Comments are discarded; use `YamlDocument.Parse` to keep them. Raises `YamlParseException` on invalid input. Double-quoted scalars accept JSON-style surrogate-pair escapes (`"\uD83C\uDF89"`); a lone surrogate escape is an error. A quoted `"<<"` key is a literal key, only the plain `<<` key merges. |
 | `TryParse` | `TryParse(text: string) : YamlValue option` | Attempts to parse a YAML document; returns `None` on failure. |
 | `ParseMultiple` | `ParseMultiple(text: string) : YamlValue seq` | Parses a `---`-separated multi-document stream. |
 | `Load` | `Load(stream: Stream) : YamlValue` | Loads a document from a stream. |
@@ -123,7 +123,7 @@ A `[<Flags>]` enumeration controlling serialization.
 **Namespace:** `FSharp.Data`
 **Inherits:** `System.Exception`
 
-Raised by `Parse`, `ParseMultiple`, `Load` and `AsyncLoad` on malformed input.
+Raised by `Parse`, `ParseMultiple`, `Load` and `AsyncLoad` on malformed input. The `*WithPositions` / `*WithMetadata` `Try` forms return the same failure as a `YamlParseError` value instead (see [Positions](#positions)).
 
 | Member | Signature | Description |
 |---|---|---|
@@ -131,6 +131,18 @@ Raised by `Parse`, `ParseMultiple`, `Load` and `AsyncLoad` on malformed input.
 | `Column` | `this.Column : int` | 1-based column number where parsing failed. |
 | `Snippet` | `this.Snippet : string` | The offending source line with a caret marking the column. |
 | `Message` | `this.Message : string` | Description of the failure, including position and snippet. |
+
+---
+
+## Emitter quoting
+
+`ToString` quotes any string that would read back as something else: values that resolve to another type (`"true"`, `"123"`, `"null"`, `"2024-01-30"`, `""`), leading/trailing whitespace, a leading indicator character, `: ` / ` #`, control characters, the string `<<` (it would read back as a merge key) and `...` / `... x` (a document end marker; `---` is already covered by the leading `-`). `Parse(v.ToString(opts)) = v` holds for every finite value and every `YamlSaveOptions` combination. A `Float` that plain text can't round-trip is emitted tagged (`!!float`); used as a block-mapping key it is written in explicit `? key` form.
+
+---
+
+## Fable
+
+The library compiles to JavaScript and Python with Fable from the same source. Under Fable the file/stream/URL loaders (`Load`, `AsyncLoad`) and `WriteTo(TextWriter, ...)` are not available, non-ISO date strings are not parsed by `AsDateTime`/`AsDateTimeOffset`/`!!timestamp`, and Python counts astral characters as one column. See [fable.md](fable.md) for prerequisites, the test runner and all known differences.
 
 ---
 
