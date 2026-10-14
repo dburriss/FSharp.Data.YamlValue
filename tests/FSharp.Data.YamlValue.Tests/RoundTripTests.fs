@@ -39,28 +39,15 @@ let private stringGen : Gen<string> =
 
         ok)
 
-/// A finite `float` that is *not* exactly `decimal`-representable, so that emitting it and
-/// reparsing resolves back to `YamlValue.Float` rather than `YamlValue.Number` (see
-/// `YamlEmitter.renderFloat`'s doc comment — the emitter has no way to mark "this must stay a
-/// Float" in plain YAML text; the only float literal forms that are unambiguous are `.inf`/`.nan`,
-/// which are handled separately and not exercised by this generator).
-///
-/// `NaN`/`Infinity` are excluded entirely: emitted, they round-trip perfectly fine as `.nan`/`.inf`
-/// text, but `Double.NaN = Double.NaN` is `false` (IEEE 754 non-reflexivity), which would make the
-/// *property* (structural equality of the parsed-back value) spuriously fail even though the
-/// emitter and parser both behaved correctly. This is a generator-design accommodation for an
-/// equality quirk, not evidence of a parser/emitter bug.
+/// Any finite `float` (any bit pattern). `NaN`/`Infinity` are excluded: emitted, they round-trip
+/// fine as `.nan`/`.inf`, but `Double.NaN = Double.NaN` is `false` (IEEE 754 non-reflexivity), which
+/// would make the *property* (structural equality of the parsed-back value) spuriously fail even
+/// though the emitter and parser both behaved correctly. Floats that plain text would read back as
+/// `Number` are tagged `!!float` by the emitter, so no further filtering is needed.
 let private nonDecimalFloatGen : Gen<float> =
     Arb.generate<int64>
     |> Gen.map BitConverter.Int64BitsToDouble
-    |> Gen.filter (fun f ->
-        not (Double.IsNaN f)
-        && not (Double.IsInfinity f)
-        && (let text = f.ToString("G17", CultureInfo.InvariantCulture)
-
-            match resolvePlainScalar text with
-            | YamlValue.Float f2 -> f2 = f
-            | _ -> false))
+    |> Gen.filter (fun f -> not (Double.IsNaN f) && not (Double.IsInfinity f))
 
 /// A `DateTimeOffset` at millisecond precision (not the full 7-digit tick precision
 /// `YamlValue.Timestamp` can technically hold) — `YamlScalar.resolvePlainScalar`'s fractional-
@@ -106,6 +93,7 @@ let private leafGen : Gen<YamlValue> =
           integralFloatGen |> Gen.map YamlValue.Float
           Arb.generate<decimal> |> Gen.map YamlValue.Number
           nonDecimalFloatGen |> Gen.map YamlValue.Float
+          Arb.generate<int> |> Gen.map (fun i -> YamlValue.Float(float i / 8.0)) // short decimal-exact text, e.g. 0.125
           Arb.generate<bool> |> Gen.map YamlValue.Boolean
           timestampGen |> Gen.map YamlValue.Timestamp
           Gen.constant YamlValue.Null ]

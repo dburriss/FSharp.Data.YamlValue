@@ -478,8 +478,22 @@ let ``integral floats round-trip inside collections and as keys`` () =
     Assert.Equal(v, roundTrip v YamlSaveOptions.Flow)
 
 [<Fact>]
-let ``non-integral floats and genuine integers keep their existing output`` () =
-    Assert.Equal("1.5\n", YamlValue.Float(1.5).ToString(YamlSaveOptions.None))
+let ``floats that already round-trip and genuine integers keep their existing output`` () =
     Assert.Equal("1.0000000000000001E+300\n", YamlValue.Float(1e300).ToString(YamlSaveOptions.None))
     Assert.Equal("1\n", YamlValue.Number(1m).ToString(YamlSaveOptions.None))
     Assert.Equal("1.0\n", YamlValue.Number(1.0m).ToString(YamlSaveOptions.None))
+
+[<Fact>]
+let ``floats whose 17-digit text is decimal-exact round-trip as floats`` () =
+    for f in [ 0.1; -0.1; 0.3; 1.1; 123.456; 1e-5; 0.5; 1.5; -2.25 ] do
+        for opts in [ YamlSaveOptions.None; YamlSaveOptions.Flow ] do
+            let text = YamlValue.Float(f).ToString(opts)
+            Assert.True(sameFloat f (YamlValue.Parse text), "Float " + string f + " emitted as " + text)
+
+[<Fact>]
+let ``floats that already round-trip as Float keep their output`` () =
+    Assert.Equal("1.0000000000000001E+300\n", YamlValue.Float(1e300).ToString(YamlSaveOptions.None))
+
+[<Fact>]
+let ``a float that would read back as a Number is tagged`` () =
+    Assert.Equal("!!float 1.5\n", YamlValue.Float(1.5).ToString(YamlSaveOptions.None))

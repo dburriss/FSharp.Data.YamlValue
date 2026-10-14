@@ -144,10 +144,14 @@ module internal YamlEmitter =
 
     /// Renders a float using round-trip-safe `"G17"` formatting (sufficient on every target
     /// framework, unlike the shortest-round-trip default `ToString()` which only round-trips
-    /// reliably from .NET Core 3.0 onward). `RoundTripTests`' generator only ever produces finite
-    /// floats that are *not* exactly `decimal`-representable (see that file for why), so the
-    /// textual shape produced here is never at risk of being re-resolved as `Number` instead of
-    /// `Float` on reparse.
+    /// reliably from .NET Core 3.0 onward).
+    ///
+    /// A plain spelling is used only when it resolves back to the very same `Float` (e.g.
+    /// `1E+300`, or a value with more than 28 significant digits). Anything the core schema would
+    /// read as a `Number` instead — every integral value, and every value whose text is exactly
+    /// `decimal`-representable such as `0.5` or `0.10000000000000001` — is emitted with an
+    /// explicit `!!float` tag, with a decimal point added to integral text; negative zero is
+    /// spelled `!!float -0.0` so it keeps its sign.
     let private renderFloat (f: float) : string =
         if Double.IsNaN f then ".nan"
         elif Double.IsPositiveInfinity f then ".inf"
@@ -155,14 +159,10 @@ module internal YamlEmitter =
         elif f = 0.0 && BitConverter.DoubleToInt64Bits f < 0L then "!!float -0.0"
         else
             let text = f.ToString("G17", CultureInfo.InvariantCulture)
-            // An integral float's "G17" text ("1", "-0", "1000000000000000") resolves back as a
-            // `Number`, and "1.0" would too (it is exactly `decimal`-representable), so no plain
-            // spelling round-trips. Force the type with an explicit `!!float` tag and a decimal
-            // point ("-0.0" also keeps the sign of negative zero).
-            if f = Math.Floor f && YamlScalar.resolvePlainScalar text <> YamlValue.Float f then
-                "!!float " + (if text.IndexOfAny([| '.'; 'E'; 'e' |]) < 0 then text + ".0" else text)
-            else
-                text
+
+            match YamlScalar.resolvePlainScalar text with
+            | YamlValue.Float f2 when f2 = f -> text
+            | _ -> "!!float " + (if text.IndexOfAny([| '.'; 'E'; 'e' |]) < 0 then text + ".0" else text)
 
     /// Renders a timestamp with full 7-digit tick precision and an explicit `Z`/offset — `"K"`
     /// yields `Z` for `TimeSpan.Zero` and `+HH:mm`/`-HH:mm` otherwise, matching
