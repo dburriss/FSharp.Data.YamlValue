@@ -24,6 +24,10 @@ operator, read with `AsInteger()`-style accessors, and write back out — includ
 - **Round-tripping emission** — `ToString`/`WriteTo` in block or flow style, with quoting rules
   that guarantee `Parse(v.ToString(YamlSaveOptions.None)) = v` (the property `RoundTripTests` checks
   via FsCheck).
+- **Source positions** — `ParseWithPositions` returns the line/column/offset span of every node,
+  keyed by JSON Pointer, and `ParseWithMetadata` also keeps the original text of timestamps.
+- **Fable** — compiles to JavaScript and Python from the same source; the test suite runs under both
+  (see [`docs/fable.md`](docs/fable.md)).
 
 ## Why
 
@@ -201,9 +205,41 @@ config.ToString(YamlSaveOptions.Flow)
 > Pass an argument — `x.ToString(YamlSaveOptions.None)` or `x.ToString(2)` — to reliably reach the
 > real emitter. The same applies to `YamlDocument.ToString()`.
 
-The emitter quotes any string that would otherwise read back as a different type — `"true"`,
-`"8080"`, `"null"`, `"2024-01-30"`, the empty string — so
-`Parse(v.ToString(YamlSaveOptions.None)) = v` always holds.
+The emitter quotes any string that would otherwise read back as a different type or structure —
+`"true"`, `"8080"`, `"null"`, `"2024-01-30"`, the empty string, `"<<"` (a merge key) and
+`"..."` (a document end marker) — so `Parse(v.ToString(YamlSaveOptions.None)) = v` always holds.
+A `Float` that plain text would read back as a `Number` (`1.0`, `0.5`, `-0.0`) is written with an
+explicit tag, e.g. `!!float 1.0`, so it stays a `Float`.
+
+### Source positions and timestamp text
+
+`Parse` is untouched; these are additive entry points that also say where each node came from:
+
+```fsharp
+let value, spans = YamlValue.ParseWithPositions "name: web\nports:\n  - 80\n"
+
+spans.["/ports/0"]
+// { Start = { Line = 3; Column = 5; Offset = 21 }
+//   End   = { Line = 3; Column = 7; Offset = 23 } }
+
+// Timestamps keep the text they were written as (`Timestamp` only holds a DateTimeOffset):
+let parsed = YamlValue.ParseWithMetadata "released: 2026-10-14"
+parsed.TimestampText.["/released"]   // "2026-10-14"
+```
+
+Spans are keyed by RFC 6901 JSON Pointer over the expanded tree (`""` is the root, `/a/0/b`,
+`~1` for `/`). `Line` and `Column` are 1-based, `Offset` is a 0-based string index, and `End` is
+exclusive. A node reached through an alias, or merged in by `<<`, is positioned at the alias or
+`<<` site. `TryParseWithPositions`, `TryParseWithMetadata`, `ParseMultipleWithPositions` and
+`ParseMultipleWithMetadata` are the non-throwing and multi-document forms; see the
+[reference](docs/reference.md#positions).
+
+### Fable
+
+The library compiles to JavaScript and Python with [Fable](https://fable.io). The file, stream
+and URL loaders and `WriteTo(TextWriter)` are not available there; parse from a string. Run the
+shared test suite under both with `scripts/fable-test.sh`. Prerequisites and known differences:
+[`docs/fable.md`](docs/fable.md).
 
 ### Building and editing
 
@@ -348,7 +384,7 @@ operator and the whole `As*` accessor family — matches `JsonValue` name for na
 
 ## Documentation
 
-Full API reference: [`docs/reference.md`](docs/reference.md).
+Full API reference: [`docs/reference.md`](docs/reference.md). Fable support: [`docs/fable.md`](docs/fable.md).
 
 Runnable, self-contained scripts for every feature above: [`examples/`](examples/).
 
