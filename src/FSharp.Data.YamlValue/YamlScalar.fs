@@ -228,11 +228,27 @@ module internal YamlScalar =
             if not (hex |> Seq.forall Uri.IsHexDigit) then
                 fail escapeStart ("Invalid hex escape sequence '" + hex + "'")
             let codepoint = Convert.ToInt32(hex, 16)
-            try
-                sb.Append(Char.ConvertFromUtf32 codepoint) |> ignore
-            with :? ArgumentOutOfRangeException ->
-                fail escapeStart ("Invalid Unicode code point U+" + codepoint.ToString("X"))
-            i <- escapeStart + digitCount
+            let next = escapeStart + digitCount
+            // JSON-style surrogate pair: a `\uD800-\uDBFF` escape immediately followed by a
+            // `\uDC00-\uDFFF` escape combines into a single supplementary code point.
+            let lowSurrogateAt =
+                if digitCount = 4 && codepoint >= 0xD800 && codepoint <= 0xDBFF
+                   && next + 6 <= len && content.[next] = '\\' && content.[next + 1] = 'u' then
+                    let lowHex = content.Substring(next + 2, 4)
+                    if lowHex |> Seq.forall Uri.IsHexDigit then
+                        let low = Convert.ToInt32(lowHex, 16)
+                        if low >= 0xDC00 && low <= 0xDFFF then low else -1
+                    else -1
+                else -1
+            if lowSurrogateAt >= 0 then
+                sb.Append(char codepoint).Append(char lowSurrogateAt) |> ignore
+                i <- next + 6
+            else
+                try
+                    sb.Append(Char.ConvertFromUtf32 codepoint) |> ignore
+                with :? ArgumentOutOfRangeException ->
+                    fail escapeStart ("Invalid Unicode code point U+" + codepoint.ToString("X"))
+                i <- next
 
         while i < len do
             let c = content.[i]
