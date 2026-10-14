@@ -113,7 +113,7 @@ module YamlPositionParsing =
         /// the key `""` becomes `/`. There is one entry per node, scalars included.
         ///
         /// - `Line`/`Column` are 1-based, `Column` counts UTF-16 units, `Offset` is a 0-based
-        ///   index into `text`, `End` is exclusive, and `\r\n` is one line break. A leading BOM
+        ///   index into `text`, `End` is exclusive, and CRLF is one line break. A leading BOM
         ///   is skipped and is not a column (note: plain `Parse` does not skip a BOM).
         /// - A node's span covers its anchor and tag if it has them (`&a !!str x`), a quoted
         ///   scalar's quotes, and a block scalar from its `|`/`>` indicator to the end of its last

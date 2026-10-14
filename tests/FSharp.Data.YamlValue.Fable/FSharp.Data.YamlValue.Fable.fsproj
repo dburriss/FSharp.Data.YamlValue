@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- Same assembly name as the .NET test project, so `InternalsVisibleTo` in the library's
+         AssemblyInfo.fs makes `YamlScalar`/`YamlReader` visible to the shared test files. -->
+    <AssemblyName>FSharp.Data.YamlValue.Tests</AssemblyName>
+    <NoWarn>$(NoWarn);FS3370</NoWarn>
+  </PropertyGroup>
+
+  <!-- Compiled by Fable (`scripts/fable-test.sh`), not by `dotnet test`: the .NET suite lives in
+       ../FSharp.Data.YamlValue.Tests and these are the same files, run through a tiny xUnit shim.
+       Runner.generated.fs and FableTestData.generated.fs are written by
+       scripts/fable-gen-runner.py (run it before building this project). -->
+  <ItemGroup>
+    <Compile Include="XunitShim.fs" />
+    <Compile Include="FableTestData.generated.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/YamlValueTests.fs" Link="Tests/YamlValueTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/YamlReaderTests.fs" Link="Tests/YamlReaderTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/ScalarTests.fs" Link="Tests/ScalarTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/FlowTests.fs" Link="Tests/FlowTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/BlockTests.fs" Link="Tests/BlockTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/BlockScalarTests.fs" Link="Tests/BlockScalarTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/AnchorTests.fs" Link="Tests/AnchorTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/DocumentTests.fs" Link="Tests/DocumentTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/CommentTests.fs" Link="Tests/CommentTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/EmitterTests.fs" Link="Tests/EmitterTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/ExtensionsTests.fs" Link="Tests/ExtensionsTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/BuilderTests.fs" Link="Tests/BuilderTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/ConformanceTests.fs" Link="Tests/ConformanceTests.fs" />
+    <Compile Include="../FSharp.Data.YamlValue.Tests/PositionTests.fs" Link="Tests/PositionTests.fs" />
+    <Compile Include="Runner.generated.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/FSharp.Data.YamlValue/FSharp.Data.YamlValue.fsproj" />
+  </ItemGroup>
+
+</Project>

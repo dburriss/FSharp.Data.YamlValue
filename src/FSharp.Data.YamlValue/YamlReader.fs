@@ -4,9 +4,9 @@ namespace FSharp.Data
 ///
 /// Conventions:
 /// - `Line` and `Column` are both **1-based**.
-/// - The cursor advances over `\n`; a `\r\n` pair is treated as a single line break by
-///   `Advance` (the `\r` is consumed silently, without incrementing column, immediately before
-///   the `\n` handling runs) so callers never observe a bare `\r` as a "column".
+// - The cursor advances over `\n`; a `\r\n` pair is treated as a single line break by
+//   `Advance` (the `\r` is consumed silently, without incrementing column, immediately before
+//   the `\n` handling runs) so callers never observe a bare `\r` as a "column".
 /// - Indentation is measured in **spaces only** — a tab encountered where indentation is being
 ///   measured is illegal in YAML and is reported as such by `CountIndent`.
 ///
@@ -155,10 +155,10 @@ module internal YamlReader =
             let len = text.Length
             not (this.IsEofAt len)
             && String.length text = len
-            && System.String.CompareOrdinal(source, offset, text, 0, len) = 0
+            && YamlPortable.regionEquals source offset text len
 
-        /// Advances by one char, correctly updating line/column. `\r\n` and lone `\n` both count
-        /// as a single line break; a lone `\r` (old Mac line endings) also counts as one. Does
+        // Advances by one char, correctly updating line/column. `\r\n` and lone `\n` both count
+        // as a single line break; a lone `\r` (old Mac line endings) also counts as one. Does
         /// nothing at EOF.
         member _.Advance() : unit =
             if offset < source.Length then
@@ -191,13 +191,13 @@ module internal YamlReader =
                 Some c
             | None -> None
 
-        /// True when the char at the current position is `' '` or `'\t'`.
+        // True when the char at the current position is `' '` or `'\t'`.
         member this.IsBlank() =
             match this.Peek() with
             | Some ' ' | Some '\t' -> true
             | _ -> false
 
-        /// True when the char at the current position is a line break (`\n` or `\r`).
+        // True when the char at the current position is a line break (`\n` or `\r`).
         member this.IsLineBreak() =
             match this.Peek() with
             | Some '\n' | Some '\r' -> true
@@ -213,7 +213,7 @@ module internal YamlReader =
                 this.Advance()
             offset - start
 
-        /// Skips exactly one line break (`\r\n`, `\n`, or `\r`) if the cursor is positioned at
+        // Skips exactly one line break (`\r\n`, `\n`, or `\r`) if the cursor is positioned at
         /// one. Returns whether a line break was skipped.
         member this.SkipLineBreak() : bool =
             if this.IsLineBreak() then

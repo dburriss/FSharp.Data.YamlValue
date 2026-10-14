@@ -40,9 +40,9 @@ type YamlValue with
         | YamlValue.Number n -> int n
         | YamlValue.Float f -> int f
         | YamlValue.String s ->
-            match Int32.TryParse(s, NumberStyles.Integer, culture) with
-            | true, v -> v
-            | false, _ -> failwithf "YamlValue.AsInteger: not an integer: %O" this
+            match YamlPortable.tryParseInt32 s culture with
+            | Some v -> v
+            | None -> failwithf "YamlValue.AsInteger: not an integer: %O" this
         | _ -> failwithf "YamlValue.AsInteger: not an integer: %O" this
 
     /// Gets a number as a 64-bit integer, assuming the value fits.
@@ -52,9 +52,9 @@ type YamlValue with
         | YamlValue.Number n -> int64 n
         | YamlValue.Float f -> int64 f
         | YamlValue.String s ->
-            match Int64.TryParse(s, NumberStyles.Integer, culture) with
-            | true, v -> v
-            | false, _ -> failwithf "YamlValue.AsInteger64: not an integer: %O" this
+            match YamlPortable.tryParseInt64 s culture with
+            | Some v -> v
+            | None -> failwithf "YamlValue.AsInteger64: not an integer: %O" this
         | _ -> failwithf "YamlValue.AsInteger64: not an integer: %O" this
 
     /// Gets a number as a decimal, assuming the value fits in a `decimal`.
@@ -64,9 +64,9 @@ type YamlValue with
         | YamlValue.Number n -> n
         | YamlValue.Float f -> decimal f
         | YamlValue.String s ->
-            match Decimal.TryParse(s, NumberStyles.Float ||| NumberStyles.AllowLeadingSign, culture) with
-            | true, v -> v
-            | false, _ -> failwithf "YamlValue.AsDecimal: not a decimal: %O" this
+            match YamlPortable.tryParseDecimal s culture with
+            | Some v -> v
+            | None -> failwithf "YamlValue.AsDecimal: not a decimal: %O" this
         | _ -> failwithf "YamlValue.AsDecimal: not a decimal: %O" this
 
     /// Gets a number as a float, assuming the value is convertible. Values listed in
@@ -79,9 +79,9 @@ type YamlValue with
         | YamlValue.Number n -> float n
         | YamlValue.String s when missingValues |> Array.exists ((=) (s.Trim())) -> Double.NaN
         | YamlValue.String s ->
-            match Double.TryParse(s, NumberStyles.Float, culture) with
-            | true, v -> v
-            | false, _ -> failwithf "YamlValue.AsFloat: not a float: %O" this
+            match YamlPortable.tryParseFloat s culture with
+            | Some v -> v
+            | None -> failwithf "YamlValue.AsFloat: not a float: %O" this
         | _ -> failwithf "YamlValue.AsFloat: not a float: %O" this
 
     /// Gets the string value of an element, assuming the value is a scalar. Returns the empty
@@ -104,9 +104,17 @@ type YamlValue with
         match this with
         | YamlValue.Timestamp t -> t.DateTime
         | YamlValue.String s ->
+#if FABLE_COMPILER
+            // Fable's DateTime.TryParse ignores culture and styles, so only the ISO shapes the
+            // scalar resolver already understands are accepted.
+            match YamlScalar.resolvePlainScalar (s.Trim()) with
+            | YamlValue.Timestamp t -> t.DateTime
+            | _ -> failwithf "YamlValue.AsDateTime: not a datetime: %O" this
+#else
             match DateTime.TryParse(s, culture, DateTimeStyles.RoundtripKind) with
             | true, v -> v
             | false, _ -> failwithf "YamlValue.AsDateTime: not a datetime: %O" this
+#endif
         | _ -> failwithf "YamlValue.AsDateTime: not a datetime: %O" this
 
     /// Gets the datetime offset of an element — either a `Timestamp`, or a string containing an
@@ -116,9 +124,16 @@ type YamlValue with
         match this with
         | YamlValue.Timestamp t -> t
         | YamlValue.String s ->
+#if FABLE_COMPILER
+            // See `AsDateTime`: only ISO shapes under Fable.
+            match YamlScalar.resolvePlainScalar (s.Trim()) with
+            | YamlValue.Timestamp t -> t
+            | _ -> failwithf "YamlValue.AsDateTimeOffset: not a datetime offset: %O" this
+#else
             match DateTimeOffset.TryParse(s, culture, DateTimeStyles.AssumeUniversal) with
             | true, v -> v
             | false, _ -> failwithf "YamlValue.AsDateTimeOffset: not a datetime offset: %O" this
+#endif
         | _ -> failwithf "YamlValue.AsDateTimeOffset: not a datetime offset: %O" this
 
     /// Gets the timespan value of an element, assuming it is a string containing a well-formed

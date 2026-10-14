@@ -45,7 +45,7 @@ module internal YamlEmitter =
     // ---------------------------------------------------------------------
 
     /// Indicator characters that are only safe as the FIRST character of a plain scalar when
-    /// quoted, per the plan: `- ? : # & * ! | > ' " % @ \` [ ] { } ,`.
+    // quoted, per the plan: `- ? : # & * ! | > ' " % @ \` [ ] { } ,`.
     let private isLeadingIndicatorChar (c: char) =
         match c with
         | '-'
@@ -102,8 +102,8 @@ module internal YamlEmitter =
     // ---------------------------------------------------------------------
 
     /// Escapes `s` for a double-quoted scalar: backslash/doublequote, the named single-char
-    /// escapes `unescapeDoubleQuoted` understands (`\0 \a \b \t \n \v \f \r \e`), and any other
-    /// control character as `\xHH`. Everything else (including non-ASCII printable text) is left
+    // escapes `unescapeDoubleQuoted` understands (`\0 \a \b \t \n \v \f \r \e`), and any other
+    // control character as `\xHH`. Everything else (including non-ASCII printable text) is left
     /// as literal UTF-16 text — double-quoted scalars permit raw Unicode content.
     let private escapeDoubleQuoted (s: string) : string =
         let sb = StringBuilder(s.Length + 8)
@@ -190,10 +190,10 @@ module internal YamlEmitter =
 
     /// Decides whether `s` (known to be multi-line) can be rendered as a `|` literal block
     /// scalar, and if so, the physical lines to write (everything up to, but not including, the
-    /// phantom empty segment that `String.Split` produces after a final `\n`) and which chomping
+    // phantom empty segment that `String.Split` produces after a final `\n`) and which chomping
     /// indicator reproduces `s`'s exact trailing-newline count on reparse.
     ///
-    /// Ineligible when `s` contains `\r` or any control character other than `\n`/`\t` (both
+    // Ineligible when `s` contains `\r` or any control character other than `\n`/`\t` (both
     /// excluded from `resolvePlainScalar`'s block-scalar territory entirely — those always fall
     /// back to a double-quoted single line with escapes), or when any physical line is
     /// non-empty-but-all-spaces (see `isAllSpacesNonEmpty`).
@@ -335,8 +335,8 @@ module internal YamlEmitter =
     /// Emits a multi-line `String` at the current cursor position (already preceded, on the same
     /// line, by whatever prefix — `key: `, `- `, or nothing at the document root — the caller has
     /// written). Prefers a `|` literal block scalar (see `tryLiteralBlockLines`); falls back to a
-    /// double-quoted single line with `\n` escaped when that isn't legal (control chars other
-    /// than `\n`/`\t`, an all-spaces-but-nonempty line) or when `indentationSpaces` can't be
+    // double-quoted single line with `\n` escaped when that isn't legal (control chars other
+    // than `\n`/`\t`, an all-spaces-but-nonempty line) or when `indentationSpaces` can't be
     /// expressed as the single-digit explicit indentation indicator literal block scalars need
     /// here (see the doc comment on `isDocumentRoot` below).
     ///
@@ -626,11 +626,13 @@ module YamlEmitterExtensions =
     /// Adds `WriteTo`/`ToString` to `YamlValue`.
     type YamlValue with
 
+#if !FABLE_COMPILER
         /// Serializes to a `TextWriter` per `saveOptions`. `indentationSpaces` (default 2) is the
         /// number of spaces added per nesting level in block style; ignored in `Flow` style.
         member this.WriteTo(writer: TextWriter, saveOptions: YamlSaveOptions, ?indentationSpaces: int) : unit =
             let indent = defaultArg indentationSpaces 2
             writer.Write(YamlEmitter.render this None [] saveOptions indent)
+#endif
 
         /// Serializes with the given formatting options. `indentationSpaces` defaults to 2.
         member this.ToString(saveOptions: YamlSaveOptions, ?indentationSpaces: int) : string =
@@ -653,6 +655,7 @@ module YamlEmitterExtensions =
     /// Adds `WriteTo`/`ToString`/comment re-emission to `YamlDocument`.
     type YamlDocument with
 
+#if !FABLE_COMPILER
         /// Serializes to a `TextWriter`, re-emitting comments and directives unless
         /// `YamlSaveOptions.SuppressComments` is set.
         member this.WriteTo(writer: TextWriter, saveOptions: YamlSaveOptions, ?indentationSpaces: int) : unit =
@@ -661,6 +664,7 @@ module YamlEmitterExtensions =
             let comments = if suppress then None else Some this.Comments
             let trailing = if suppress then [] else this.Trailing
             writer.Write(YamlEmitter.render this.Value comments trailing saveOptions indent)
+#endif
 
         /// Serializes with the given options, re-emitting comments unless
         /// `YamlSaveOptions.SuppressComments` is set. `indentationSpaces` defaults to 2.

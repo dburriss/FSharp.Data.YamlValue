@@ -480,3 +480,10 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Fable test harness (scripts/fable-test.sh)
+tests/FSharp.Data.YamlValue.Fable/out-js/
+tests/FSharp.Data.YamlValue.Fable/out-python/
+tests/FSharp.Data.YamlValue.Fable/.venv/
+tests/FSharp.Data.YamlValue.Fable/*.generated.fs
+tests/FSharp.Data.YamlValue.Fable/fable_modules/

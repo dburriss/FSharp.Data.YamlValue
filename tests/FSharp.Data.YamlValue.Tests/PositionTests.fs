@@ -192,14 +192,18 @@ let ``multi-document spans are relative to the whole stream`` () =
 
 [<Fact>]
 let ``ParseWithPositions agrees with Parse on every conformance input`` () =
+#if FABLE_COMPILER
+    let files = FableTestData.names "" |> List.filter (fun n -> n.EndsWith ".yaml") |> List.map (fun n -> n, FableTestData.read n)
+#else
     let dir = Path.Combine(AppContext.BaseDirectory, "data")
+    let files = [ for f in Directory.GetFiles(dir, "*.yaml") -> Path.GetFileName f, File.ReadAllText f ]
+#endif
     let mutable checkedCount = 0
-    for file in Directory.GetFiles(dir, "*.yaml") do
-        let text = File.ReadAllText file
+    for (fileName, text) in files do
         let plain = try Ok(YamlValue.Parse text) with :? YamlParseException as e -> Error(e.Line, e.Column)
         let withPos =
             try Ok(fst (YamlValue.ParseWithPositions text)) with :? YamlParseException as e -> Error(e.Line, e.Column)
-        Assert.True((plain = withPos), Path.GetFileName file)
+        Assert.True((plain = withPos), fileName)
         match withPos with
         | Ok v ->
             // every pointer in the expanded tree has a span
@@ -214,7 +218,7 @@ let ``ParseWithPositions agrees with Parse on every conformance input`` () =
                 | YamlValue.Sequence xs -> p :: [ for i in 0 .. xs.Length - 1 do yield! pointers (p + "/" + string i) xs.[i] ]
                 | _ -> [ p ]
             for p in pointers "" v do
-                Assert.True(spans.ContainsKey p, Path.GetFileName file + ": missing " + p)
+                Assert.True(spans.ContainsKey p, fileName + ": missing " + p)
         | Error _ -> ()
         checkedCount <- checkedCount + 1
     Assert.True(checkedCount > 20)

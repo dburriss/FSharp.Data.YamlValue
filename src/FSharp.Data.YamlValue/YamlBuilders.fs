@@ -59,7 +59,7 @@ module internal YamlPathDsl =
             fail path pos "expected a key"
         path.Substring(pos, i - pos), i
 
-    /// Reads a `["..."]`-quoted key segment, unescaping `\"` and `\\`. `pos` is the index of the
+    // Reads a `["..."]`-quoted key segment, unescaping `\"` and `\\`. `pos` is the index of the
     /// opening quote.
     let private readQuoted (path: string) (pos: int) : string * int =
         let sb = Text.StringBuilder()
@@ -90,8 +90,8 @@ module internal YamlPathDsl =
             if i >= path.Length then
                 fail path pos "unterminated '['"
             let digits = path.Substring(inner, i - inner)
-            match Int32.TryParse(digits, Globalization.NumberStyles.Integer, Globalization.CultureInfo.InvariantCulture) with
-            | true, n when n >= 0 -> Index n, i + 1
+            match YamlPortable.tryParseInt32 digits Globalization.CultureInfo.InvariantCulture with
+            | Some n when n >= 0 -> Index n, i + 1
             | _ -> fail path inner ("expected a non-negative index, got '" + digits + "'")
 
     let parse (path: string) : YamlPathStep list =

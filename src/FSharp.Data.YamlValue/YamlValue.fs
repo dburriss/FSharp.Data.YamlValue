@@ -107,7 +107,7 @@ type YamlSaveOptions =
 
 /// A position in the source text. `Line` and `Column` are 1-based (`Column` counts UTF-16 code
 /// units from the start of the line; a leading byte-order mark is not a column); `Offset` is the
-/// 0-based UTF-16 index into the source string. `\r\n`, `\n` and a lone `\r` each count as one
+/// 0-based UTF-16 index into the source string. CRLF, LF and a lone CR each count as one
 /// line break.
 type Pos = { Line: int; Column: int; Offset: int }
 

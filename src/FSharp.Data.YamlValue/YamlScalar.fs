@@ -71,20 +71,31 @@ module internal YamlScalar =
         let mutable e = exp - fracPart.Length
         let mutable unscaled = unscaled0
 
-        if unscaled <> BigInteger.Zero then
+        if unscaled <> BigInteger(0) then
             let ten = BigInteger(10)
-            while unscaled % ten = BigInteger.Zero do
+            while unscaled % ten = BigInteger(0) do
                 unscaled <- unscaled / ten
                 e <- e + 1
 
+        // 10^e with e > 28 (and a non-zero mantissa) already exceeds `maxDecimalUnscaled`, so
+        // the power is only built for e <= 28 (a loop: `BigInteger.Pow` is not in every Fable
+        // target, and this also avoids building a huge power for an input like `1e999999`).
         let m', scale =
             if e >= 0 then
-                (unscaled * BigInteger.Pow(BigInteger(10), e), 0)
+                if unscaled = BigInteger(0) then
+                    (BigInteger(0), 0)
+                elif e > 28 then
+                    (maxDecimalUnscaled + BigInteger(1), 0)
+                else
+                    let mutable p = unscaled
+                    for _ in 1 .. e do
+                        p <- p * BigInteger(10)
+                    (p, 0)
             else
                 (unscaled, -e)
 
         if scale <= 28 && BigInteger.Abs(m') <= maxDecimalUnscaled then
-            Some(Decimal.Parse(original, NumberStyles.Float ||| NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture))
+            Some(YamlPortable.parseDecimal original)
         else
             None
 
@@ -117,7 +128,7 @@ module internal YamlScalar =
         elif text = "false" || text = "False" || text = "FALSE" then
             YamlValue.Boolean false
         elif intPattern.IsMatch text then
-            YamlValue.Number(Decimal.Parse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture))
+            YamlValue.Number(YamlPortable.parseDecimal text)
         elif octPattern.IsMatch text then
             let digits = text.Substring(2)
             let value = digits |> Seq.fold (fun acc c -> acc * 8L + int64 (int c - int '0')) 0L
@@ -137,7 +148,7 @@ module internal YamlScalar =
             if floatMatch.Success then
                 match tryExactDecimal floatMatch text with
                 | Some d -> YamlValue.Number d
-                | None -> YamlValue.Float(Double.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture))
+                | None -> YamlValue.Float(YamlPortable.parseDouble text)
             else
                 let dateMatch = datePattern.Match text
                 let dateTimeMatch = dateTimePattern.Match text
@@ -155,15 +166,26 @@ module internal YamlScalar =
                             if fraction.Success then
                                 // fraction.Value includes the leading '.'
                                 let frac = "0" + fraction.Value
-                                int64 (Double.Parse(frac, CultureInfo.InvariantCulture) * 10_000_000.0)
+                                int64 (YamlPortable.parseDouble frac * 10_000_000.0)
                             else
                                 0L
                         let offset = parseOffset (g 8)
-                        let dt = DateTime(year, month, day, hour, minute, second, DateTimeKind.Unspecified).AddTicks(ticks)
-                        YamlValue.Timestamp(DateTimeOffset(dt, offset))
+                        // The 7-argument constructor (not `DateTimeOffset(DateTime Unspecified,
+                        // offset)`, which Fable treats as local time) plus `AddTicks`. The
+                        // components are range-checked first so every platform rejects (as a
+                        // String) what the .NET constructor would throw on.
+                        if year < 1 || month < 1 || month > 12 || day < 1 || day > DateTime.DaysInMonth(year, month)
+                           || hour > 23 || minute > 59 || second > 59 then
+                            YamlValue.String text
+                        else
+                            YamlValue.Timestamp(DateTimeOffset(year, month, day, hour, minute, second, offset).AddTicks(ticks))
                     elif dateMatch.Success then
                         let g (i: int) = int dateMatch.Groups.[i].Value
-                        YamlValue.Timestamp(DateTimeOffset(g 1, g 2, g 3, 0, 0, 0, TimeSpan.Zero))
+                        let year, month, day = g 1, g 2, g 3
+                        if year < 1 || month < 1 || month > 12 || day < 1 || day > DateTime.DaysInMonth(year, month) then
+                            YamlValue.String text
+                        else
+                            YamlValue.Timestamp(DateTimeOffset(year, month, day, 0, 0, 0, TimeSpan.Zero))
                     else
                         YamlValue.String text
                 with :? ArgumentOutOfRangeException ->
@@ -190,8 +212,8 @@ module internal YamlScalar =
         sb.ToString()
 
     /// Unescapes the content of a double-quoted scalar (the text *between* the quotes).
-    /// Supports `\x.. \u.... \U........ \0 \a \b \t \n \v \f \r \e \" \\ \N \_ \L \P` and
-    /// escaped-newline folding: a `\` immediately before a line break consumes the break and
+    // Supports `\x.. \u.... \U........ \0 \a \b \t \n \v \f \r \e \" \\ \N \_ \L \P` and
+    // escaped-newline folding: a `\` immediately before a line break consumes the break and
     /// any leading whitespace on the continuation line, contributing no character to the
     /// result. Raises `YamlParseException` on a malformed escape.
     ///
@@ -199,6 +221,7 @@ module internal YamlScalar =
     /// function has no notion of where `content` sits in the wider source; a parser translating
     /// this into a document-relative position is a later-phase concern).
     let unescapeDoubleQuoted (content: string) : string =
+        let tryAppendCodePoint = YamlPortable.tryAppendCodePoint
         let len = content.Length
 
         let positionOf (i: int) : int * int =
@@ -225,7 +248,7 @@ module internal YamlScalar =
             if escapeStart + digitCount > len then
                 fail escapeStart "Truncated hex escape sequence"
             let hex = content.Substring(escapeStart, digitCount)
-            if not (hex |> Seq.forall Uri.IsHexDigit) then
+            if not (hex |> Seq.forall YamlPortable.isHexDigit) then
                 fail escapeStart ("Invalid hex escape sequence '" + hex + "'")
             let codepoint = Convert.ToInt32(hex, 16)
             let next = escapeStart + digitCount
@@ -235,18 +258,16 @@ module internal YamlScalar =
                 if digitCount = 4 && codepoint >= 0xD800 && codepoint <= 0xDBFF
                    && next + 6 <= len && content.[next] = '\\' && content.[next + 1] = 'u' then
                     let lowHex = content.Substring(next + 2, 4)
-                    if lowHex |> Seq.forall Uri.IsHexDigit then
+                    if lowHex |> Seq.forall YamlPortable.isHexDigit then
                         let low = Convert.ToInt32(lowHex, 16)
                         if low >= 0xDC00 && low <= 0xDFFF then low else -1
                     else -1
                 else -1
             if lowSurrogateAt >= 0 then
-                sb.Append(char codepoint).Append(char lowSurrogateAt) |> ignore
+                tryAppendCodePoint sb (0x10000 + ((codepoint - 0xD800) <<< 10) + (lowSurrogateAt - 0xDC00)) |> ignore
                 i <- next + 6
             else
-                try
-                    sb.Append(Char.ConvertFromUtf32 codepoint) |> ignore
-                with :? ArgumentOutOfRangeException ->
+                if not (tryAppendCodePoint sb codepoint) then
                     fail escapeStart ("Invalid Unicode code point U+" + codepoint.ToString("X"))
                 i <- next
 

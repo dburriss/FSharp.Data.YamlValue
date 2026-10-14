@@ -134,8 +134,8 @@ module internal YamlParser =
         /// each `parseBlockMapping`/`parseBlockSequence` call: when a nested collection's own
         /// "is there another entry" check comes back false (a dedent back out to an enclosing
         /// collection, most commonly), whatever it collected along the way must remain available
-        /// for the *enclosing* collection's next entry to claim — e.g. `parent:\n  child: 1\n#
-        /// note\nsibling: 2` — the nested `child` mapping collects "note" while looking for a
+        // for the *enclosing* collection's next entry to claim — e.g. `parent:\n  child: 1\n#
+        // note\nsibling: 2` — the nested `child` mapping collects "note" while looking for a
         /// second entry of its own, finds none (dedent), and returns without touching the buffer;
         /// the outer mapping's loop then resumes, sees "sibling" as its next entry, and claims
         /// "note" as its leading comment. Only meaningful when `Sink` is `Some`; whatever is left
@@ -246,29 +246,29 @@ module internal YamlParser =
             | "false" | "False" | "FALSE" -> YamlValue.Boolean false
             | _ -> raise (cur.Error("Invalid value '" + rawText + "' for tag !!bool"))
         | "!!int" ->
-            match System.Decimal.TryParse(
-                      rawText,
-                      System.Globalization.NumberStyles.AllowLeadingSign,
-                      System.Globalization.CultureInfo.InvariantCulture) with
-            | true, d -> YamlValue.Number d
-            | false, _ -> raise (cur.Error("Invalid value '" + rawText + "' for tag !!int"))
+            match YamlPortable.tryParseIntegerDecimal rawText with
+            | Some d -> YamlValue.Number d
+            | None -> raise (cur.Error("Invalid value '" + rawText + "' for tag !!int"))
         | "!!float" ->
-            match System.Double.TryParse(
-                      rawText,
-                      System.Globalization.NumberStyles.Float,
-                      System.Globalization.CultureInfo.InvariantCulture) with
-            | true, f -> YamlValue.Float f
-            | false, _ -> raise (cur.Error("Invalid value '" + rawText + "' for tag !!float"))
+            match YamlPortable.tryParseFloat rawText System.Globalization.CultureInfo.InvariantCulture with
+            | Some f -> YamlValue.Float f
+            | None -> raise (cur.Error("Invalid value '" + rawText + "' for tag !!float"))
         | "!!timestamp" ->
             match YamlScalar.resolvePlainScalar rawText with
             | YamlValue.Timestamp _ as t -> t
             | _ ->
+#if FABLE_COMPILER
+                // Fable's DateTimeOffset.TryParse ignores culture and styles; only the ISO
+                // shapes `resolvePlainScalar` understands are timestamps there.
+                raise (cur.Error("Invalid value '" + rawText + "' for tag !!timestamp"))
+#else
                 match System.DateTimeOffset.TryParse(
                           rawText,
                           System.Globalization.CultureInfo.InvariantCulture,
                           System.Globalization.DateTimeStyles.AssumeUniversal) with
                 | true, dto -> YamlValue.Timestamp dto
                 | false, _ -> raise (cur.Error("Invalid value '" + rawText + "' for tag !!timestamp"))
+#endif
         | "!!map" | "!!seq" ->
             // A shape mismatch (the tagged node turned out to be a plain scalar, not a mapping/
             // sequence) — fall back to normal resolution rather than erroring.
@@ -461,7 +461,7 @@ module internal YamlParser =
 
     /// Line-folds the raw (pre-unescape) content of a multi-line quoted scalar per YAML's quoted-
     /// scalar folding rule (see `foldRun`). For double-quoted scalars, a line break immediately
-    /// preceded by an odd number of backslashes is a `\`-escaped line continuation — handled
+    // preceded by an odd number of backslashes is a `\`-escaped line continuation — handled
     /// entirely by `YamlScalar.unescapeDoubleQuoted` — and is passed through here completely
     /// untouched (including the following line's leading whitespace) so that handling is not
     /// double-processed; folding resumes as a fresh run on both sides of it.
@@ -535,7 +535,7 @@ module internal YamlParser =
             cur.Recorder.AddLeaf({ Line = startPos.Line; Column = startPos.Column; Offset = startPos.Offset }, cur.Pos, text)
         YamlValue.String text
 
-    /// Strips the ` at line L, column C\n<snippet>` suffix that `YamlParseException`'s
+    // Strips the ` at line L, column C\n<snippet>` suffix that `YamlParseException`'s
     /// constructor appends, recovering the original message passed to `YamlReader.Cursor.Error`
     /// / `YamlScalar.unescapeDoubleQuoted`'s internal `fail`.
     let private originalMessage (ex: YamlParseException) : string =
@@ -1073,7 +1073,7 @@ module internal YamlParser =
     /// Scans a plain scalar in block context across as many physical lines as continue it, per
     /// the same line-folding rule used elsewhere (`foldRun`): a continuation line must be
     /// indented strictly more than `parentIndent` (the enclosing mapping/sequence's own indent —
-    /// not the scalar's own starting column, so the common `key: this is\n  folded` shape, where
+    // not the scalar's own starting column, so the common `key: this is\n  folded` shape, where
     /// the continuation is indented less than where "this" started, is legal). The scalar ends at
     /// EOF, at a line at or below `parentIndent`, or — even when more indented — at a line that
     /// looks like the start of a new block construct (a mapping entry, a `-` sequence entry, or a
@@ -1220,16 +1220,19 @@ module internal YamlParser =
             | _ -> moreHeader <- false
         if not (isNull cur.Recorder) then contentEnd <- cur.Pos
         cur.SkipBlanks() |> ignore
+        // Written as plain `if`s rather than a `match` with a unit `()` arm: Fable's Python
+        // backend drops that arm and falls through to the error branch.
         (match cur.Peek() with
-         | None
-         | Some ('\n' | '\r') -> ()
-         | Some '#' when isCommentStart cur ->
-             match state.Sink with
-             | None -> cur.SkipComment() |> ignore
-             | Some sink ->
-                 let text = (cur.SkipComment()).Trim()
-                 if text <> "" then sink.SetTrailing(state.CurrentPath, text)
-         | Some c -> raise (cur.Error("Invalid character '" + string c + "' in block scalar header")))
+         | Some c when c <> '\n' && c <> '\r' ->
+             if c = '#' && isCommentStart cur then
+                 match state.Sink with
+                 | None -> cur.SkipComment() |> ignore
+                 | Some sink ->
+                     let text = (cur.SkipComment()).Trim()
+                     if text <> "" then sink.SetTrailing(state.CurrentPath, text)
+             else
+                 raise (cur.Error("Invalid character '" + string c + "' in block scalar header"))
+         | _ -> ())
         cur.SkipLineBreak() |> ignore
 
         let lines = ResizeArray<string option>()
@@ -1402,7 +1405,7 @@ module internal YamlParser =
             let inlineIndent = cur.Column - 1
             parseNodeAtWithTag cur inlineIndent blockIndent state tagOpt
 
-    /// Looks for a value on a subsequent, more-indented line (the "key:\n  value" / "-\n  value"
+    // Looks for a value on a subsequent, more-indented line (the "key:\n  value" / "-\n  value"
     /// shape). `parentIndent` is the enclosing entry's own indent; a following content line is
     /// only accepted as this entry's value if its indent is strictly greater. If the next content
     /// line is at or below `parentIndent` (or there is none), the cursor is restored to before
@@ -1510,7 +1513,7 @@ module internal YamlParser =
     /// Explicit-key limitation: the value following `?` is parsed inline (flow node, quoted
     /// scalar, or single-line plain scalar) when content follows `?` on the same line; a key that
     /// is itself a multi-line block collection is only supported via the "empty `?`, key starts
-    /// on a following more-indented line" path (`? \n  - a\n  - b\n: value`), which falls out of
+    // on a following more-indented line" path (`? \n  - a\n  - b\n: value`), which falls out of
     /// `parseIndentedValue`'s full recursion for free. A block collection starting inline right
     /// after `? ` on the same line is not supported — not valid YAML in the first place.
     ///
@@ -2002,6 +2005,7 @@ module internal YamlParser =
 [<AutoOpen>]
 module YamlValueParsing =
 
+#if !FABLE_COMPILER
     /// Shared `Load`/`AsyncLoad` plumbing for both `YamlValue` and `YamlDocument`: reads the text
     /// behind a `uri`, which may be an `http(s)` URL (fetched via `HttpClient`) or a local file
     /// path (read via `File.OpenRead`), with an optional explicit `Encoding` (UTF-8 detected from
@@ -2035,6 +2039,7 @@ module YamlValueParsing =
         /// overloads.
         let readText (uri: string) (encoding: Encoding option) : string =
             readTextAsync uri encoding |> Async.RunSynchronously
+#endif
 
     type YamlValue with
         /// Parses a single YAML document. Comments are discarded; use `YamlDocument.Parse` to
@@ -2064,6 +2069,7 @@ module YamlValueParsing =
         static member ParseMultiple(text: string) : YamlValue seq =
             YamlParser.parseStream text false :> seq<_>
 
+#if !FABLE_COMPILER
         /// Loads a single document from a stream, read to end as text (using the stream's own
         /// default text decoding — see the `TextReader`/`uri` overloads for explicit encoding
         /// control).
@@ -2087,6 +2093,7 @@ module YamlValueParsing =
                 let! text = YamlLoad.readTextAsync uri encoding
                 return YamlValue.Parse text
             }
+#endif
 
 /// Adds the `Parse`/`TryParse`/`ParseMultiple`/`Load`/`AsyncLoad` family to `YamlDocument`,
 /// mirroring `YamlValue`'s but also capturing `%YAML`/`%TAG` directives (in `Directives`, source
@@ -2130,6 +2137,7 @@ module YamlDocumentParsing =
         /// `Comments`.
         member this.TryGetComments(path: YamlPath) : YamlNodeComments option = Map.tryFind path this.Comments
 
+#if !FABLE_COMPILER
         /// Loads a single document from a stream.
         static member Load(stream: Stream) : YamlDocument =
             use reader = new StreamReader(stream)
@@ -2151,3 +2159,4 @@ module YamlDocumentParsing =
                 let! text = YamlValueParsing.YamlLoad.readTextAsync uri encoding
                 return YamlDocument.Parse text
             }
+#endif

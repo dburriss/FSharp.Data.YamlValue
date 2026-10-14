@@ -155,6 +155,8 @@ let ``a directive appearing after the document's own --- marker is an error`` ()
 // Load / AsyncLoad / TryParse
 // ---------------------------------------------------------------------
 
+// The loaders read files/streams/URLs and are compiled out under Fable (`#if !FABLE_COMPILER`).
+#if !FABLE_COMPILER
 [<Fact>]
 let ``Load from a file path parses the file's contents`` () =
     let path = Path.GetTempFileName()
@@ -197,6 +199,8 @@ let ``YamlDocument.Load from a file path parses and captures directives`` () =
         Assert.Contains(("YAML", "1.2"), doc.Directives)
     finally
         File.Delete(path)
+
+#endif
 
 [<Fact>]
 let ``TryParse returns Some for valid input`` () =

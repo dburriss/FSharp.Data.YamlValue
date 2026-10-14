@@ -36,10 +36,19 @@ open FSharp.Data
 /// Directory containing the curated case files, resolved relative to the test assembly's output
 /// directory (populated there by the `<None Include="data/**/*" CopyToOutputDirectory=.../>`
 /// item in the .fsproj).
+#if FABLE_COMPILER
+// No file system under Fable: `scripts/fable-gen-runner.py` embeds the data files in FableTestData.
+let private readData (fileName: string) : string = FableTestData.read fileName
+let private errorCaseFiles () : string list = FableTestData.names "error-" |> List.filter (fun n -> n.EndsWith ".yaml")
+#else
 let private dataDir = Path.Combine(AppContext.BaseDirectory, "data")
 
 let private readData (fileName: string) : string =
     File.ReadAllText(Path.Combine(dataDir, fileName))
+
+let private errorCaseFiles () : string list =
+    Directory.GetFiles(dataDir, "error-*.yaml") |> Seq.map Path.GetFileName |> List.ofSeq
+#endif
 
 /// Case names (without extension) that have a `.yaml` + `.json` pair, for the JSON-equivalence
 /// comparison. Kept as an explicit list (rather than discovered by scanning for pairs) so the
@@ -75,8 +84,7 @@ type JsonEquivalenceCaseData() =
 type ErrorCaseData() =
     interface IEnumerable<obj[]> with
         member _.GetEnumerator() : IEnumerator<obj[]> =
-            (Directory.GetFiles(dataDir, "error-*.yaml")
-             |> Seq.map (fun path -> [| box (Path.GetFileName path) |])).GetEnumerator()
+            (errorCaseFiles () |> Seq.map (fun name -> [| box name |])).GetEnumerator()
     interface System.Collections.IEnumerable with
         member this.GetEnumerator() : System.Collections.IEnumerator =
             ((this :> IEnumerable<obj[]>).GetEnumerator() :> System.Collections.IEnumerator)

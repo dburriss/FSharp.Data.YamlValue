@@ -26,6 +26,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="YamlValue.fs" />
+    <Compile Include="YamlPortable.fs" />
     <Compile Include="YamlReader.fs" />
     <Compile Include="YamlScalar.fs" />
     <Compile Include="YamlParser.fs" />
