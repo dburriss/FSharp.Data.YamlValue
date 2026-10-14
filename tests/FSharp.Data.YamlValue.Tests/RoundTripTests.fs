@@ -88,9 +88,22 @@ let private timestampGen : Gen<DateTimeOffset> =
         | YamlValue.Timestamp t2 -> t2 = t
         | _ -> false)
 
+/// Integral floats (including `-0.0`): no plain spelling of these re-resolves as `Float`, so the
+/// emitter must tag them (`!!float`).
+let private integralFloatGen : Gen<float> =
+    Gen.frequency [ 5, (Arb.generate<int64> |> Gen.map float)
+                    2, (Gen.choose (-1000, 1000) |> Gen.map float)
+                    1, Gen.constant -0.0 ]
+
+/// Strings that look like merge keys or document markers.
+let private specialStringGen : Gen<string> =
+    Gen.elements [ "<<"; "..."; "---"; "--- x"; "... x"; "<<<"; "..."; "...x" ]
+
 let private leafGen : Gen<YamlValue> =
     Gen.oneof
         [ stringGen |> Gen.map YamlValue.String
+          specialStringGen |> Gen.map YamlValue.String
+          integralFloatGen |> Gen.map YamlValue.Float
           Arb.generate<decimal> |> Gen.map YamlValue.Number
           nonDecimalFloatGen |> Gen.map YamlValue.Float
           Arb.generate<bool> |> Gen.map YamlValue.Boolean

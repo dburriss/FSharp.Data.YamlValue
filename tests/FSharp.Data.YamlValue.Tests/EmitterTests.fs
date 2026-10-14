@@ -444,3 +444,42 @@ let ``document-marker-like strings round-trip as keys and values`` () =
         Assert.Equal(v, roundTrip v YamlSaveOptions.Flow)
         let seq = YamlValue.Sequence [| YamlValue.String s; YamlValue.String s |]
         Assert.Equal(seq, roundTrip seq YamlSaveOptions.None)
+
+// ---------------------------------------------------------------------
+// Integral floats must stay floats
+// ---------------------------------------------------------------------
+
+let private integralFloats =
+    [| 1.0; -1.0; 0.0; 100.0; 123456789.0; 1e15; 1e16; 123456789012345678.0; -2e16; 1e17 |]
+
+let private sameFloat (expected: float) (actual: YamlValue) =
+    match actual with
+    | YamlValue.Float f -> System.BitConverter.DoubleToInt64Bits expected = System.BitConverter.DoubleToInt64Bits f
+    | _ -> false
+
+[<Fact>]
+let ``integral floats round-trip as floats`` () =
+    for f in integralFloats do
+        for opts in [ YamlSaveOptions.None; YamlSaveOptions.Flow ] do
+            let text = YamlValue.Float(f).ToString(opts)
+            Assert.True(sameFloat f (YamlValue.Parse text), "Float " + string f + " emitted as " + text)
+
+[<Fact>]
+let ``negative zero keeps its sign`` () =
+    let text = YamlValue.Float(-0.0).ToString(YamlSaveOptions.None)
+    Assert.Equal("!!float -0.0\n", text)
+    Assert.True(sameFloat -0.0 (YamlValue.Parse text))
+
+[<Fact>]
+let ``integral floats round-trip inside collections and as keys`` () =
+    let v =
+        YamlValue.Mapping [| YamlValue.Float 1.0, YamlValue.Sequence [| YamlValue.Float 2.0; YamlValue.Number 3m |] |]
+    Assert.Equal(v, roundTrip v YamlSaveOptions.None)
+    Assert.Equal(v, roundTrip v YamlSaveOptions.Flow)
+
+[<Fact>]
+let ``non-integral floats and genuine integers keep their existing output`` () =
+    Assert.Equal("1.5\n", YamlValue.Float(1.5).ToString(YamlSaveOptions.None))
+    Assert.Equal("1.0000000000000001E+300\n", YamlValue.Float(1e300).ToString(YamlSaveOptions.None))
+    Assert.Equal("1\n", YamlValue.Number(1m).ToString(YamlSaveOptions.None))
+    Assert.Equal("1.0\n", YamlValue.Number(1.0m).ToString(YamlSaveOptions.None))

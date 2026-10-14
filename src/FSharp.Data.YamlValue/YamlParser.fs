@@ -1422,7 +1422,7 @@ module internal YamlParser =
                     | Some '#' when isCommentStart cur ->
                         cur.Seek(rightAfterQ)
                         parseValueAfterMarker cur indent state
-                    | Some ('{' | '[') -> parseFlowNode cur state
+                    | Some ('{' | '[' | '!') -> parseFlowNode cur state
                     | Some '\'' -> parseSingleQuoted cur
                     | Some '"' -> parseDoubleQuoted cur
                     | Some _ -> YamlScalar.resolvePlainScalar ((scanBlockPlainScalar cur).Trim())

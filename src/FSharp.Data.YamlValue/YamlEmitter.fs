@@ -152,7 +152,17 @@ module internal YamlEmitter =
         if Double.IsNaN f then ".nan"
         elif Double.IsPositiveInfinity f then ".inf"
         elif Double.IsNegativeInfinity f then "-.inf"
-        else f.ToString("G17", CultureInfo.InvariantCulture)
+        elif f = 0.0 && BitConverter.DoubleToInt64Bits f < 0L then "!!float -0.0"
+        else
+            let text = f.ToString("G17", CultureInfo.InvariantCulture)
+            // An integral float's "G17" text ("1", "-0", "1000000000000000") resolves back as a
+            // `Number`, and "1.0" would too (it is exactly `decimal`-representable), so no plain
+            // spelling round-trips. Force the type with an explicit `!!float` tag and a decimal
+            // point ("-0.0" also keeps the sign of negative zero).
+            if f = Math.Floor f && YamlScalar.resolvePlainScalar text <> YamlValue.Float f then
+                "!!float " + (if text.IndexOfAny([| '.'; 'E'; 'e' |]) < 0 then text + ".0" else text)
+            else
+                text
 
     /// Renders a timestamp with full 7-digit tick precision and an explicit `Z`/offset — `"K"`
     /// yields `Z` for `TimeSpan.Zero` and `+HH:mm`/`-HH:mm` otherwise, matching
@@ -299,7 +309,11 @@ module internal YamlEmitter =
         | YamlValue.Mapping _
         | YamlValue.Sequence _ -> ExplicitKey
         | YamlValue.String s when s.Contains("\n") -> ExplicitKey
-        | scalar -> SimpleKey(renderScalarBlock scalar)
+        | scalar ->
+            let rendered = renderScalarBlock scalar
+            // A `!!float` tag on an implicit key can't be followed by a block-collection value
+            // (the parser reads `!!float 1.0:` as a tag on the whole node), so use `? key`.
+            if rendered.StartsWith("!!", StringComparison.Ordinal) then ExplicitKey else SimpleKey rendered
 
     let private writeLeading (sb: StringBuilder) (pad: string) (comments: YamlNodeComments option) =
         match comments with
