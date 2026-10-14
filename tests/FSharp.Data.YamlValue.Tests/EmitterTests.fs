@@ -422,3 +422,25 @@ let ``a quoted "<<" key in source is a literal key, not a merge key`` () =
 let ``a real "<<" merge key still merges`` () =
     let r = YamlValue.Parse "base: &b {a: 1}\nd:\n  <<: *b\n  x: 2\n"
     Assert.Equal(YamlValue.Number 1m, prop "a" (prop "d" r))
+
+// ---------------------------------------------------------------------
+// Document marker lookalikes ("---", "...")
+// ---------------------------------------------------------------------
+
+let private markerStrings = [| "..."; "---"; "--- x"; "... x"; "...\tx"; "---\tx" |]
+
+[<Fact>]
+let ``document-marker-like strings round-trip at the root`` () =
+    for s in markerStrings do
+        let v = YamlValue.String s
+        Assert.Equal(v, roundTrip v YamlSaveOptions.None)
+        Assert.Equal(v, roundTrip v YamlSaveOptions.Flow)
+
+[<Fact>]
+let ``document-marker-like strings round-trip as keys and values`` () =
+    for s in markerStrings do
+        let v = YamlValue.Mapping [| YamlValue.String s, YamlValue.String s |]
+        Assert.Equal(v, roundTrip v YamlSaveOptions.None)
+        Assert.Equal(v, roundTrip v YamlSaveOptions.Flow)
+        let seq = YamlValue.Sequence [| YamlValue.String s; YamlValue.String s |]
+        Assert.Equal(seq, roundTrip seq YamlSaveOptions.None)

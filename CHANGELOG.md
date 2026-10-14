@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Strings `"..."` and those starting with `"... "` are now quoted on emit so they are not re-read as a document end marker (`"---"` and `"--- "…` were already quoted via the leading-indicator rule; regression tests now cover them at the root and as keys/values).
 - The string `"<<"` is now quoted on emit, and a quoted `"<<"` mapping key in the source is treated as a literal key rather than a merge key (only the plain `<<` key merges), so `Parse(v.ToString())` round-trips a `"<<"` key instead of merging or dropping it.
 - Double-quoted scalars now accept JSON-style UTF-16 surrogate-pair escapes (e.g. `"\uD83C\uDF89"` parses to U+1F389) instead of failing with "Invalid Unicode code point". A lone/unpaired surrogate escape is still an error.
 

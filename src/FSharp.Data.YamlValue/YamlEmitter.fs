@@ -82,6 +82,9 @@ module internal YamlEmitter =
         YamlScalar.resolvePlainScalar s <> YamlValue.String s
         || s <> s.Trim()
         || (s.Length > 0 && isLeadingIndicatorChar s.[0])
+        || s = "..." // a bare `...` (or `... x`) line is a document end marker
+        || s.StartsWith("... ", StringComparison.Ordinal)
+        || s.StartsWith("...\t", StringComparison.Ordinal)
         || s = "<<" // a bare `<<` key is a merge key on reparse
         || s.Contains(": ")
         || s.EndsWith(":")
