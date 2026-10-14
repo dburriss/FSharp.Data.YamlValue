@@ -134,6 +134,36 @@ Raised by `Parse`, `ParseMultiple`, `Load` and `AsyncLoad` on malformed input.
 
 ---
 
+## Positions
+
+**Namespace:** `FSharp.Data`
+
+Additive parse entry points that report where every node came from. They sit beside `Parse`, which never tracks positions (same result, same cost).
+
+| Member | Signature | Description |
+|---|---|---|
+| `ParseWithPositions` | `ParseWithPositions(text: string, ?disableMergeKeys: bool) : YamlValue * Map<string, Span>` | `Parse`, plus the source `Span` of every node keyed by JSON Pointer. |
+| `TryParseWithPositions` | `TryParseWithPositions(text: string, ?disableMergeKeys: bool) : Result<YamlValue * Map<string, Span>, YamlParseError>` | Non-throwing form; the error carries the message and failure `Pos`. |
+| `ParseMultipleWithPositions` | `ParseMultipleWithPositions(text: string) : (YamlValue * Map<string, Span>) seq` | One span table per document; positions relative to the whole stream. |
+
+```fsharp
+type Pos = { Line: int; Column: int; Offset: int }
+type Span = { Start: Pos; End: Pos }
+type YamlParseError = { Message: string; Pos: Pos }
+```
+
+Conventions (shared with the sibling JSON library):
+
+- `Line` and `Column` are 1-based; `Column` counts UTF-16 code units; `Offset` is a 0-based index into the string; `End` is exclusive (just after the node's last character).
+- `\r\n`, `\n` and a lone `\r` each count as one line break. A leading BOM is skipped and is not a column (plain `Parse` does not skip it).
+- Keys are RFC 6901 JSON Pointers over the **expanded** tree: `""` is the root, `/a/0/b`, `~0` for `~`, `~1` for `/`, and the key `""` is `/`. There is one entry per node, scalars included.
+- A node's span covers its anchor and tag (`&a !!str x`), a quoted scalar's quotes, and a block scalar from its `|`/`>` to the end of its last content line. An omitted value (`a:`, a bare `-`) is a zero-width span right after the `:`/`-`.
+- Duplicate mapping keys: the first occurrence owns the pointer, as with `TryGetProperty`. Only string keys get entries; nodes under a non-string key get none.
+- **Aliases:** the alias site owns the whole expanded subtree. The node at an alias and every node under it map to the span of the `*name` token (not the anchor definition), so every pointer into the expanded tree has a span.
+- **Merge keys:** entries merged in by `<<` (and everything under them) map to the span of the `<<` entry's value: the `*alias`, the inline mapping, or the whole `[*a, *b]`. The `<<` key itself has no pointer after expansion; with `disableMergeKeys = true` it is an ordinary `/<<` entry.
+
+---
+
 ## Comment types
 
 **Namespace:** `FSharp.Data`

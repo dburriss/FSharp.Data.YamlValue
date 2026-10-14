@@ -73,6 +73,7 @@ module internal YamlParser =
     /// currently being parsed — both meaningful only when comment capture is enabled.
     type internal ParseState(mergeKeysEnabled: bool, ?commentSink: CommentSink) =
         let anchors = Dictionary<string, YamlValue>()
+        let anchorNodes = Dictionary<string, SpanNode>()
         let inFlight = HashSet<string>()
         let pathStack = ResizeArray<YamlPathStep>()
         let pendingLeading = ResizeArray<string>()
@@ -86,6 +87,16 @@ module internal YamlParser =
         member _.EndAnchor(name: string, value: YamlValue) =
             inFlight.Remove name |> ignore
             anchors.[name] <- value
+
+        /// (Position-tracking parses only) remembers the span node of `name`'s anchored node, so an
+        /// alias can later point at it (see `SpanNode.Origin`).
+        member _.SetAnchorNode(name: string, node: SpanNode) = anchorNodes.[name] <- node
+
+        /// The span node recorded for `name`, or `null` if none (not tracking, or empty node).
+        member _.TryGetAnchorNode(name: string) : SpanNode =
+            match anchorNodes.TryGetValue name with
+            | true, n -> n
+            | false, _ -> null
 
         /// Whether `name` refers to an anchor whose node is still under construction.
         member _.IsInFlight(name: string) = inFlight.Contains name
@@ -136,6 +147,32 @@ module internal YamlParser =
     /// what follows it (see `scanFlowPlainScalar`).
     let private isFlowIndicator (c: char) =
         c = ',' || c = '[' || c = ']' || c = '{' || c = '}'
+
+    // -----------------------------------------------------------------------
+    // Position tracking helpers. `cur.Recorder` is null on the plain `Parse` path, so each of
+    // these is a null check there.
+    // -----------------------------------------------------------------------
+
+    /// The cursor's position as a `Pos`, or `null` when not tracking — so the plain `Parse` path
+    /// never allocates one.
+    let private posOf (cur: Cursor) : Pos =
+        if isNull cur.Recorder then Unchecked.defaultof<Pos> else cur.Pos
+
+    /// How many nodes the recorder has completed in its current frame (0 when not tracking).
+    let private nodeCount (cur: Cursor) : int =
+        if isNull cur.Recorder then 0 else cur.Recorder.Count
+
+    /// When tracking, records a zero-width node at `at` unless a node was recorded since `before`
+    /// — used where YAML allows an omitted (null) node: `a:`, `-`, `{a}`, an empty document.
+    let private ensureNode (cur: Cursor) (before: int) (at: Pos) : unit =
+        let r = cur.Recorder
+        if not (isNull r) && r.Count = before then r.AddLeaf(at, at, null)
+
+    /// When tracking and a node was recorded since `before`, extends it back to `start` so a
+    /// node's span covers its anchor and tag.
+    let private extendSince (cur: Cursor) (before: int) (start: Pos) : unit =
+        let r = cur.Recorder
+        if not (isNull r) && r.Count > before then r.ExtendLastStart start
 
     // -----------------------------------------------------------------------
     // Anchors, aliases, and tags (Phase 6) — shared between flow and block parsing
@@ -258,33 +295,63 @@ module internal YamlParser =
     let private applyMergeKeys
         (items: ResizeArray<YamlValue * YamlValue>)
         (quotedKeys: HashSet<int>)
-        : (YamlValue * YamlValue)[] =
+        (kids: SpanNode[])
+        : struct ((YamlValue * YamlValue)[] * SpanNode[]) =
         let mergeKey = YamlValue.String "<<"
+        let tracking = not (isNull kids) && kids.Length = items.Count * 2
         let explicitPairs = ResizeArray<YamlValue * YamlValue>()
+        let explicitKids = ResizeArray<SpanNode>()
         let mergeSources = ResizeArray<YamlValue>()
+        let mergeNodes = ResizeArray<SpanNode>()
         for idx in 0 .. items.Count - 1 do
             let (k, v) = items.[idx]
-            if k = mergeKey && not (quotedKeys.Contains idx) then mergeSources.Add v
-            else explicitPairs.Add((k, v))
+            if k = mergeKey && not (quotedKeys.Contains idx) then
+                mergeSources.Add v
+                if tracking then mergeNodes.Add kids.[idx * 2 + 1]
+            else
+                explicitPairs.Add((k, v))
+                if tracking then
+                    explicitKids.Add kids.[idx * 2]
+                    explicitKids.Add kids.[idx * 2 + 1]
         if mergeSources.Count = 0 then
-            explicitPairs.ToArray()
+            struct (explicitPairs.ToArray(), (if tracking then explicitKids.ToArray() else kids))
         else
             let seenKeys = HashSet<YamlValue>(explicitPairs |> Seq.map fst)
             let mergedPairs = ResizeArray<YamlValue * YamlValue>()
-            let addSource (source: YamlValue) =
+            let mergedKids = ResizeArray<SpanNode>()
+            // The span node reached by following alias origins from `n`, or `null`.
+            let rec resolve (n: SpanNode) : SpanNode =
+                if isNull n then null elif isNull n.Origin then n else resolve n.Origin
+            let childOf (n: SpanNode) (i: int) : SpanNode =
+                let r = resolve n
+                if isNull r || r.Children.Length <= i then null else r.Children.[i]
+            // `site` is where a merged-in entry is positioned (the `<<` entry's value); `nav` is
+            // the span node of the source mapping itself, used to recover per-pair Raw text.
+            let addSource (source: YamlValue) (nav: SpanNode) (site: SpanNode) =
                 match source with
                 | YamlValue.Mapping pairs ->
-                    for (k, v) in pairs do
-                        if seenKeys.Add k then mergedPairs.Add((k, v))
+                    for j in 0 .. pairs.Length - 1 do
+                        let (k, v) = pairs.[j]
+                        if seenKeys.Add k then
+                            mergedPairs.Add((k, v))
+                            if tracking then
+                                mergedKids.Add(SpanNode(site.Span, [||], null, childOf nav (j * 2)))
+                                mergedKids.Add(SpanNode(site.Span, [||], null, childOf nav (j * 2 + 1)))
                 | _ ->
                     // A non-mapping merge source is silently ignored — lenient, matching common
                     // real-world merge-key implementations rather than erroring.
                     ()
-            for source in mergeSources do
-                match source with
-                | YamlValue.Sequence elems -> for e in elems do addSource e
-                | other -> addSource other
-            Array.append (explicitPairs.ToArray()) (mergedPairs.ToArray())
+            for si in 0 .. mergeSources.Count - 1 do
+                let site = if tracking then mergeNodes.[si] else null
+                match mergeSources.[si] with
+                | YamlValue.Sequence elems ->
+                    for ei in 0 .. elems.Length - 1 do
+                        addSource elems.[ei] (if tracking then childOf site ei else null) site
+                | other -> addSource other site site
+            struct (
+                Array.append (explicitPairs.ToArray()) (mergedPairs.ToArray()),
+                (if tracking then Array.append (explicitKids.ToArray()) (mergedKids.ToArray()) else kids)
+            )
 
     /// Skips everything between flow tokens that carries no meaning: blanks, `#` comments, and
     /// line breaks. YAML flow collections may freely span multiple lines, so — unlike a
@@ -463,7 +530,10 @@ module internal YamlParser =
             | Some _ -> cur.Advance()
         let raw = cur.Source.Substring(contentStart, endOffset - contentStart)
         let folded = if raw.IndexOfAny([| '\n'; '\r' |]) >= 0 then foldQuotedRaw raw false else raw
-        YamlValue.String(YamlScalar.unescapeSingleQuoted folded)
+        let text = YamlScalar.unescapeSingleQuoted folded
+        if not (isNull cur.Recorder) then
+            cur.Recorder.AddLeaf({ Line = startPos.Line; Column = startPos.Column; Offset = startPos.Offset }, cur.Pos, text)
+        YamlValue.String text
 
     /// Strips the ` at line L, column C\n<snippet>` suffix that `YamlParseException`'s
     /// constructor appends, recovering the original message passed to `YamlReader.Cursor.Error`
@@ -499,7 +569,10 @@ module internal YamlParser =
         let raw = cur.Source.Substring(contentStart, endOffset - contentStart)
         let folded = if raw.IndexOfAny([| '\n'; '\r' |]) >= 0 then foldQuotedRaw raw true else raw
         try
-            YamlValue.String(YamlScalar.unescapeDoubleQuoted folded)
+            let text = YamlScalar.unescapeDoubleQuoted folded
+            if not (isNull cur.Recorder) then
+                cur.Recorder.AddLeaf({ Line = startPos.Line; Column = startPos.Column; Offset = startPos.Offset }, cur.Pos, text)
+            YamlValue.String text
         with :? YamlParseException as ex ->
             // ex.Line/ex.Column are 1-based, relative to `raw` alone. Translate onto the
             // document: line 1 of `raw` continues on `contentPos`'s line; later lines of `raw`
@@ -526,21 +599,33 @@ module internal YamlParser =
     and private parseFlowNodeWithTag (cur: Cursor) (state: ParseState) (tagOpt: string option) : YamlValue =
         match cur.Peek() with
         | Some '&' ->
+            let startPos = posOf cur
             cur.Advance()
             let name = scanAnchorName cur
             state.BeginAnchor name
             skipFlowWhitespace cur
+            let before = nodeCount cur
             let value = parseFlowNodeWithTag cur state tagOpt
+            extendSince cur before startPos
+            if nodeCount cur > before then state.SetAnchorNode(name, cur.Recorder.Last)
             state.EndAnchor(name, value)
             value
         | Some '*' ->
+            let startPos = posOf cur
             cur.Advance()
             let name = scanAnchorName cur
-            resolveAlias cur state name
+            let value = resolveAlias cur state name
+            if not (isNull cur.Recorder) then
+                cur.Recorder.AddAlias(startPos, cur.Pos, state.TryGetAnchorNode name)
+            value
         | Some '!' ->
+            let startPos = posOf cur
             let tag = scanTag cur
             skipFlowWhitespace cur
-            parseFlowNodeWithTag cur state (Some tag)
+            let before = nodeCount cur
+            let value = parseFlowNodeWithTag cur state (Some tag)
+            extendSince cur before startPos
+            value
         | Some '{' -> parseFlowMapping cur state
         | Some '[' -> parseFlowSequence cur state
         | Some '\'' -> applyTagToScalar cur tagOpt (parseSingleQuoted cur)
@@ -549,7 +634,9 @@ module internal YamlParser =
         | Some c when isFlowIndicator c ->
             raise (cur.Error("Expected a value, found '" + string c + "'"))
         | Some _ ->
+            let startPos = posOf cur
             let text = scanFlowPlainScalar cur
+            if not (isNull cur.Recorder) then cur.Recorder.AddLeaf(startPos, cur.Pos, text)
             match tagOpt with
             | Some tag -> applyCoreTag cur tag text
             | None -> YamlScalar.resolvePlainScalar text
@@ -564,12 +651,23 @@ module internal YamlParser =
         skipFlowWhitespace cur
         match cur.Peek() with
         | Some ':' ->
+            let rcd = cur.Recorder
+            let keyNode = if isNull rcd then null else rcd.PopLast()
+            if not (isNull rcd) then
+                rcd.Begin()
+                rcd.AddNode keyNode
             cur.Advance()
+            let afterColon = posOf cur
             skipFlowWhitespace cur
+            let before = nodeCount cur
             let value =
                 match cur.Peek() with
                 | Some (',' | ']') -> YamlValue.Null
                 | _ -> parseFlowNode cur state
+            ensureNode cur before afterColon
+            if not (isNull rcd) then
+                let kids = rcd.PopFrame()
+                rcd.Finish(keyNode.Span.Start, kids)
             YamlValue.Mapping [| (node, value) |]
         | _ -> node
 
@@ -578,6 +676,8 @@ module internal YamlParser =
     /// keys (`<<: *base`) are expanded per `state.MergeKeysEnabled` — see `applyMergeKeys`.
     and private parseFlowMapping (cur: Cursor) (state: ParseState) : YamlValue =
         let openPos = cur.Position
+        let startPos = posOf cur
+        if not (isNull cur.Recorder) then cur.Recorder.Begin()
         cur.Advance() // opening {
         let items = ResizeArray<YamlValue * YamlValue>()
         let quotedKeys = HashSet<int>()
@@ -592,16 +692,21 @@ module internal YamlParser =
                 if (match cur.Peek() with Some ('"' | '\'') -> true | _ -> false) then
                     quotedKeys.Add items.Count |> ignore
                 let key = parseFlowNode cur state
+                let afterKey = posOf cur
                 skipFlowWhitespace cur
+                let before = nodeCount cur
+                let mutable valueAt = afterKey
                 let value =
                     match cur.Peek() with
                     | Some ':' ->
                         cur.Advance()
+                        valueAt <- posOf cur
                         skipFlowWhitespace cur
                         match cur.Peek() with
                         | Some (',' | '}') -> YamlValue.Null
                         | _ -> parseFlowNode cur state
                     | _ -> YamlValue.Null
+                ensureNode cur before valueAt
                 items.Add((key, value))
                 skipFlowWhitespace cur
                 match cur.Peek() with
@@ -615,13 +720,19 @@ module internal YamlParser =
                     cur.Advance()
                     more <- false
                 | _ -> raise (cur.Error "Expected ',' or '}' in flow mapping")
-        let finalItems = if state.MergeKeysEnabled then applyMergeKeys items quotedKeys else items.ToArray()
+        let kids = if isNull cur.Recorder then null else cur.Recorder.PopFrame()
+        let struct (finalItems, finalKids) =
+            if state.MergeKeysEnabled then applyMergeKeys items quotedKeys kids
+            else struct (items.ToArray(), kids)
+        if not (isNull cur.Recorder) then cur.Recorder.FinishAt(startPos, cur.Pos, finalKids)
         YamlValue.Mapping finalItems
 
     /// Parses a flow sequence, cursor positioned at the opening `[`. Supports trailing commas
     /// (`[1, 2,]`) and the compact flow-pair shorthand via `parseFlowSequenceEntry`.
     and private parseFlowSequence (cur: Cursor) (state: ParseState) : YamlValue =
         let openPos = cur.Position
+        let startPos = posOf cur
+        if not (isNull cur.Recorder) then cur.Recorder.Begin()
         cur.Advance() // opening [
         let items = ResizeArray<YamlValue>()
         skipFlowWhitespace cur
@@ -646,6 +757,7 @@ module internal YamlParser =
                     cur.Advance()
                     more <- false
                 | _ -> raise (cur.Error "Expected ',' or ']' in flow sequence")
+        if not (isNull cur.Recorder) then cur.Recorder.FinishAt(startPos, cur.Pos, cur.Recorder.PopFrame())
         YamlValue.Sequence(items.ToArray())
 
     // -----------------------------------------------------------------------
@@ -952,7 +1064,11 @@ module internal YamlParser =
         match cur.Peek() with
         | Some '\'' -> parseSingleQuoted cur
         | Some '"' -> parseDoubleQuoted cur
-        | _ -> YamlScalar.resolvePlainScalar ((scanBlockPlainScalar cur).Trim())
+        | _ ->
+            let startPos = posOf cur
+            let text = (scanBlockPlainScalar cur).Trim()
+            if not (isNull cur.Recorder) then cur.Recorder.AddLeaf(startPos, cur.Pos, text)
+            YamlScalar.resolvePlainScalar text
 
     /// Scans a plain scalar in block context across as many physical lines as continue it, per
     /// the same line-folding rule used elsewhere (`foldRun`): a continuation line must be
@@ -1079,6 +1195,8 @@ module internal YamlParser =
     /// `parseBlockSequence`).
     let private parseBlockScalar (cur: Cursor) (parentIndent: int) (state: ParseState) : YamlValue =
         let isFolded = cur.Peek() = Some '>'
+        let startPos = posOf cur
+        let mutable contentEnd = Unchecked.defaultof<Pos>
         cur.Advance() // consume '|' or '>'
         let mutable chomp = Clip
         let mutable explicitIndent: int option = None
@@ -1100,6 +1218,7 @@ module internal YamlParser =
                 seenIndent <- true
                 cur.Advance()
             | _ -> moreHeader <- false
+        if not (isNull cur.Recorder) then contentEnd <- cur.Pos
         cur.SkipBlanks() |> ignore
         (match cur.Peek() with
          | None
@@ -1150,6 +1269,7 @@ module internal YamlParser =
                             let restStart = cur.Offset
                             while not (cur.IsEndOfLine()) do
                                 cur.Advance()
+                            if not (isNull cur.Recorder) then contentEnd <- cur.Pos
                             let rest = cur.Source.Substring(restStart, cur.Offset - restStart)
                             lines.Add(Some(System.String(' ', extra) + rest))
                             cur.SkipLineBreak() |> ignore
@@ -1169,6 +1289,7 @@ module internal YamlParser =
             | Keep ->
                 let extra = if lastContentIdx >= 0 then 1 else 0
                 body0 + String.replicate (trailingBlankCount + extra) "\n"
+        if not (isNull cur.Recorder) then cur.Recorder.AddLeaf(startPos, contentEnd, final)
         YamlValue.String final
 
     /// Parses one node — anchor, alias, tag, block sequence, block mapping, flow node, or
@@ -1195,19 +1316,35 @@ module internal YamlParser =
         : YamlValue =
         match cur.Peek() with
         | Some '&' ->
+            let startPos = posOf cur
             cur.Advance()
             let name = scanAnchorName cur
             state.BeginAnchor name
+            let afterProps = posOf cur
+            let before = nodeCount cur
             let value = parseValueAfterMarkerWithTag cur parentIndent state tagOpt
+            ensureNode cur before afterProps
+            extendSince cur before startPos
+            if nodeCount cur > before then state.SetAnchorNode(name, cur.Recorder.Last)
             state.EndAnchor(name, value)
             value
         | Some '*' ->
+            let startPos = posOf cur
             cur.Advance()
             let name = scanAnchorName cur
-            resolveAlias cur state name
+            let value = resolveAlias cur state name
+            if not (isNull cur.Recorder) then
+                cur.Recorder.AddAlias(startPos, cur.Pos, state.TryGetAnchorNode name)
+            value
         | Some '!' ->
+            let startPos = posOf cur
             let tag = scanTag cur
-            parseValueAfterMarkerWithTag cur parentIndent state (Some tag)
+            let afterProps = posOf cur
+            let before = nodeCount cur
+            let value = parseValueAfterMarkerWithTag cur parentIndent state (Some tag)
+            ensureNode cur before afterProps
+            extendSince cur before startPos
+            value
         | Some '-' when isDashIndicator cur -> parseBlockSequence cur indent state
         | Some '?' when isExplicitKeyIndicator cur -> parseBlockMapping cur indent state
         | Some ('{' | '[') -> parseFlowNode cur state
@@ -1221,7 +1358,9 @@ module internal YamlParser =
             if looksLikeMappingEntry cur then
                 parseBlockMapping cur indent state
             else
+                let startPos = posOf cur
                 let text = scanBlockPlainScalarMultiLine cur parentIndent
+                if not (isNull cur.Recorder) then cur.Recorder.AddLeaf(startPos, cur.Pos, text)
                 match tagOpt with
                 | Some tag -> applyCoreTag cur tag text
                 | None -> YamlScalar.resolvePlainScalar text
@@ -1309,6 +1448,8 @@ module internal YamlParser =
     /// (non-first) entry is attached to that entry's `Index i` path, and a same-line comment
     /// after an entry's value is attached there too as its trailing comment.
     and private parseBlockSequence (cur: Cursor) (indent: int) (state: ParseState) : YamlValue =
+        let startPos = posOf cur
+        if not (isNull cur.Recorder) then cur.Recorder.Begin()
         let items = ResizeArray<YamlValue>()
         let mutable continueLoop = true
         let mutable isFirst = true
@@ -1349,11 +1490,15 @@ module internal YamlParser =
                 let dashIndent = cur.Column - 1
                 cur.Advance() // consume '-'
                 let childPath = pushPathAndRecordLeading state (Index idx) leading
+                let afterDash = posOf cur
+                let before = nodeCount cur
                 let value = parseValueAfterMarker cur dashIndent state
+                ensureNode cur before afterDash
                 popPathIfCapturing state
                 captureTrailingComment cur state childPath
                 items.Add(value)
                 idx <- idx + 1
+        if not (isNull cur.Recorder) then cur.Recorder.Finish(startPos, cur.Recorder.PopFrame())
         YamlValue.Sequence(items.ToArray())
 
     /// Parses a block mapping — `key: value` (and/or `? key` / `: value`) entries sharing the
@@ -1373,6 +1518,8 @@ module internal YamlParser =
     /// (non-first) entry is attached to that entry's `Key k` path, and a same-line comment after
     /// an entry's value is attached there too as its trailing comment.
     and private parseBlockMapping (cur: Cursor) (indent: int) (state: ParseState) : YamlValue =
+        let startPos = posOf cur
+        if not (isNull cur.Recorder) then cur.Recorder.Begin()
         let items = ResizeArray<YamlValue * YamlValue>()
         let quotedKeys = HashSet<int>()
         let mutable continueLoop = true
@@ -1410,9 +1557,11 @@ module internal YamlParser =
                 state.PendingLeading.Clear()
                 cur.Advance() // consume '?'
                 let rightAfterQ = cur.Position
+                let afterQ = posOf cur
                 cur.SkipBlanks() |> ignore
                 if (match cur.Peek() with Some ('"' | '\'') -> true | _ -> false) then
                     quotedKeys.Add items.Count |> ignore
+                let keyBefore = nodeCount cur
                 let key =
                     match cur.Peek() with
                     | None -> YamlValue.Null
@@ -1425,12 +1574,20 @@ module internal YamlParser =
                     | Some ('{' | '[' | '!') -> parseFlowNode cur state
                     | Some '\'' -> parseSingleQuoted cur
                     | Some '"' -> parseDoubleQuoted cur
-                    | Some _ -> YamlScalar.resolvePlainScalar ((scanBlockPlainScalar cur).Trim())
+                    | Some _ ->
+                        let startPos = posOf cur
+                        let text = (scanBlockPlainScalar cur).Trim()
+                        if not (isNull cur.Recorder) then cur.Recorder.AddLeaf(startPos, cur.Pos, text)
+                        YamlScalar.resolvePlainScalar text
+                ensureNode cur keyBefore afterQ
                 cur.SkipBlanks() |> ignore
                 let childPath = pushPathAndRecordLeading state (Key key) leading
+                let valueBefore = nodeCount cur
+                let mutable valueAt = posOf cur
                 let value =
                     if cur.Peek() = Some ':' then
                         cur.Advance()
+                        valueAt <- posOf cur
                         parseValueAfterMarker cur indent state
                     else
                         skipBlankLines cur None
@@ -1446,7 +1603,9 @@ module internal YamlParser =
                         if cur.Peek() <> Some ':' then
                             raise (cur.Error "Expected ':' to continue an explicit mapping key")
                         cur.Advance()
+                        valueAt <- posOf cur
                         parseValueAfterMarker cur indent state
+                ensureNode cur valueBefore valueAt
                 popPathIfCapturing state
                 captureTrailingComment cur state childPath
                 items.Add((key, value))
@@ -1461,13 +1620,23 @@ module internal YamlParser =
                     raise (cur.Error "Expected ':' after mapping key")
                 cur.Advance() // consume ':'
                 let childPath = pushPathAndRecordLeading state (Key key) leading
+                let afterColon = posOf cur
+                let before = nodeCount cur
                 let value = parseValueAfterMarker cur indent state
+                ensureNode cur before afterColon
                 popPathIfCapturing state
                 captureTrailingComment cur state childPath
                 items.Add((key, value))
             else
                 raise (cur.Error "Expected a mapping entry")
-        let finalItems = if state.MergeKeysEnabled then applyMergeKeys items quotedKeys else items.ToArray()
+        let kids = if isNull cur.Recorder then null else cur.Recorder.PopFrame()
+        let struct (finalItems, finalKids) =
+            if state.MergeKeysEnabled then applyMergeKeys items quotedKeys kids
+            else struct (items.ToArray(), kids)
+        if not (isNull cur.Recorder) then
+            // End at the last *source* entry — merged-in entries are positioned at their `<<` site.
+            let finish = if kids.Length = 0 then startPos else kids.[kids.Length - 1].Span.End
+            cur.Recorder.FinishAt(startPos, finish, finalKids)
         YamlValue.Mapping finalItems
 
     // -----------------------------------------------------------------------
@@ -1669,7 +1838,10 @@ module internal YamlParser =
     /// swept up as document-level `Trailing` by `consumeDocumentEndCollecting`.
     let private parseOneDocument (cur: Cursor) (state: ParseState) : YamlValue * (string * string) list =
         let directives, hadMarker = parseDirectivesAndMarker cur state
+        let bodyAt = posOf cur
+        let bodyBefore = nodeCount cur
         let value = parseDocumentBody cur hadMarker state
+        ensureNode cur bodyBefore bodyAt
         captureTrailingComment cur state []
         consumeDocumentEndCollecting cur state
         (value, directives)
@@ -1708,6 +1880,26 @@ module internal YamlParser =
         let commentsMap = match sink with Some s -> s.ToCommentsMap() | None -> Map.empty
         let trailingList = match sink with Some s -> s.Trailing | None -> []
         (value, directives, commentsMap, trailingList)
+
+    /// Position-tracking twin of `parseDocument` — the `YamlValue.ParseWithPositions` entry
+    /// point. Returns the value together with the span tree of its root node (see `SpanNode`).
+    let parseDocumentWithSpans (text: string) (disableMergeKeys: bool) : YamlValue * SpanNode =
+        let cur = Cursor(text)
+        cur.SkipBom()
+        let recorder = SpanRecorder()
+        cur.Recorder <- recorder
+        let state = ParseState(not disableMergeKeys)
+        let value, _ = parseOneDocument cur state
+        skipAndCollectTrailing cur state
+        if not cur.IsEof then
+            if isDocumentStartMarkerAt cur then
+                raise (
+                    cur.Error
+                        "Multiple documents found in stream; use YamlValue.ParseMultiple or YamlDocument.ParseMultiple to parse a multi-document stream"
+                )
+            else
+                raise (cur.Error "Unexpected content after document")
+        (value, recorder.Root)
 
     /// `parseDocumentFull` with comment capture off — the plain `YamlValue.Parse` entry point
     /// (via `parseDocument`, below).
@@ -1754,6 +1946,29 @@ module internal YamlParser =
                 continueLoop <- false
             elif isDocumentStartMarkerAt cur then
                 () // next iteration's parseDirectivesAndMarker consumes it
+            else
+                raise (cur.Error "Unexpected content after document")
+        List.ofSeq results
+
+    /// Position-tracking twin of `parseStream` — the `YamlValue.ParseMultipleWithPositions`
+    /// entry point; one span tree per document, offsets relative to the whole stream.
+    let parseStreamWithSpans (text: string) (disableMergeKeys: bool) : (YamlValue * SpanNode) list =
+        let cur = Cursor(text)
+        cur.SkipBom()
+        let results = ResizeArray<YamlValue * SpanNode>()
+        skipBlankLines cur None
+        let mutable continueLoop = not cur.IsEof
+        while continueLoop do
+            let recorder = SpanRecorder()
+            cur.Recorder <- recorder
+            let state = ParseState(not disableMergeKeys)
+            let value, _ = parseOneDocument cur state
+            skipAndCollectTrailing cur state
+            results.Add((value, recorder.Root))
+            if cur.IsEof then
+                continueLoop <- false
+            elif isDocumentStartMarkerAt cur then
+                ()
             else
                 raise (cur.Error "Unexpected content after document")
         List.ofSeq results

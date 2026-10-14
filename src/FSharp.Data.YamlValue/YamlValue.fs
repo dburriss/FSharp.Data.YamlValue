@@ -105,6 +105,21 @@ type YamlSaveOptions =
     /// Emits a leading `---` and a trailing `...`.
     | ExplicitDocumentMarkers = 8
 
+/// A position in the source text. `Line` and `Column` are 1-based (`Column` counts UTF-16 code
+/// units from the start of the line; a leading byte-order mark is not a column); `Offset` is the
+/// 0-based UTF-16 index into the source string. `\r\n`, `\n` and a lone `\r` each count as one
+/// line break.
+type Pos = { Line: int; Column: int; Offset: int }
+
+/// A source range. `Start` is the first character of the node and `End` is the position just
+/// after its last character (exclusive).
+type Span = { Start: Pos; End: Pos }
+
+/// A parse failure reported as a value (see `YamlValue.TryParseWithPositions`): the bare message
+/// (without the line/column/snippet suffix `YamlParseException.Message` carries) and where it
+/// happened.
+type YamlParseError = { Message: string; Pos: Pos }
+
 /// Renders the source line at `line`/`column` with a `^` caret underneath pointing at the
 /// offending column, for use in `YamlParseException` messages.
 module internal YamlParseSnippet =

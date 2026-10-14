@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Source positions: `YamlValue.ParseWithPositions`, `TryParseWithPositions` and `ParseMultipleWithPositions` return a `Map<string, Span>` from RFC 6901 JSON Pointer (over the expanded tree) to the source span of every node, with new `Pos`, `Span` and `YamlParseError` types. Aliases and merged-in keys are positioned at the alias / `<<` site. `Parse` and its performance are unchanged; see `docs/reference.md`.
+
 ### Fixed
 
 - Every finite `Float` now round-trips as `Float`. A float whose plain text would resolve to `Number` (not just integral ones, but also decimal-exact values such as `0.5`, `1.5` or `0.1`, which emits as `0.10000000000000001`) is emitted with an explicit `!!float` tag, e.g. `!!float 1.5`. Floats whose plain text already re-parses as `Float` (e.g. `1.0000000000000001E+300`) are emitted exactly as before. The FsCheck generator no longer filters out these values.

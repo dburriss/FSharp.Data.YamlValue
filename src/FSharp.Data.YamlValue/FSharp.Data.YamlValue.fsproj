@@ -29,6 +29,7 @@
     <Compile Include="YamlReader.fs" />
     <Compile Include="YamlScalar.fs" />
     <Compile Include="YamlParser.fs" />
+    <Compile Include="YamlPositions.fs" />
     <Compile Include="YamlEmitter.fs" />
     <Compile Include="YamlExtensions.fs" />
     <Compile Include="YamlBuilders.fs" />
