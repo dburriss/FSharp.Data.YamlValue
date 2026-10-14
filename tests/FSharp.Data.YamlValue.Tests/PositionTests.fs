@@ -218,3 +218,66 @@ let ``ParseWithPositions agrees with Parse on every conformance input`` () =
         | Error _ -> ()
         checkedCount <- checkedCount + 1
     Assert.True(checkedCount > 20)
+
+// ---------------------------------------------------------------------
+// Timestamp original text (ParseWithMetadata)
+// ---------------------------------------------------------------------
+
+[<Theory>]
+[<InlineData("2026-10-14")>]
+[<InlineData("2026-10-14T01:02:03Z")>]
+[<InlineData("2026-10-14T01:02:03+02:00")>]
+[<InlineData("2026-10-14T01:02:03")>]
+[<InlineData("2026-10-14 01:02:03")>]
+[<InlineData("2026-10-14t01:02:03.123456z")>]
+[<InlineData("2026-10-14T01:02:03.5-05:30")>]
+let ``timestamp source text is kept`` (ts: string) =
+    let p = YamlValue.ParseWithMetadata("when: " + ts + "\n")
+    Assert.True(
+        (match p.Root with
+         | YamlValue.Mapping [| _, YamlValue.Timestamp _ |] -> true
+         | _ -> false)
+    )
+    Assert.Equal<(string * string) list>([ "/when", ts ], p.TimestampText |> Map.toList)
+
+[<Fact>]
+let ``timestamp text covers flow, sequences, aliases, merges and tags`` () =
+    let text =
+        "a: &d 2026-01-02\nb: *d\nc: [2026-03-04, \"2026-05-06\", 7]\nm: &m {t: 2026-07-08 09:10:11}\nd:\n  <<: *m\ne: !!timestamp 2026-09-10\n"
+    let p = YamlValue.ParseWithMetadata text
+    let t = p.TimestampText
+    Assert.Equal("2026-01-02", t.["/a"])
+    Assert.Equal("2026-01-02", t.["/b"])
+    Assert.Equal("2026-03-04", t.["/c/0"])
+    Assert.False(t.ContainsKey "/c/1") // quoted: a String, not a Timestamp
+    Assert.False(t.ContainsKey "/c/2")
+    Assert.Equal("2026-07-08 09:10:11", t.["/m/t"])
+    Assert.Equal("2026-07-08 09:10:11", t.["/d/t"])
+    Assert.Equal("2026-09-10", t.["/e"])
+
+[<Fact>]
+let ``metadata agrees with ParseWithPositions and Parse`` () =
+    let text = "a: 2026-10-14\nb: [1, {c: x}]\n"
+    let p = YamlValue.ParseWithMetadata text
+    let v, spans = YamlValue.ParseWithPositions text
+    Assert.Equal(YamlValue.Parse text, p.Root)
+    Assert.Equal(v, p.Root)
+    Assert.Equal<Map<string, Span>>(spans, p.Spans)
+
+[<Fact>]
+let ``multi-document metadata and the non-throwing form`` () =
+    let docs = YamlValue.ParseMultipleWithMetadata "a: 2026-01-01\n---\nb: 2026-02-02 03:04:05\n" |> List.ofSeq
+    Assert.Equal("2026-01-01", docs.[0].TimestampText.["/a"])
+    Assert.Equal("2026-02-02 03:04:05", docs.[1].TimestampText.["/b"])
+    match YamlValue.TryParseWithMetadata "a: [" with
+    | Error e -> Assert.Equal(1, e.Pos.Line)
+    | Ok _ -> failwith "expected error"
+
+[<Fact>]
+let ``plain Parse still holds only the DateTimeOffset`` () =
+    // Documented limitation: Parse alone cannot tell a date from midnight UTC, or say a zone was omitted.
+    let date = YamlValue.Parse "2026-10-14"
+    let midnight = YamlValue.Parse "2026-10-14T00:00:00Z"
+    let zoneless = YamlValue.Parse "2026-10-14T01:02:03"
+    Assert.Equal(date, midnight)
+    Assert.Equal(YamlValue.Timestamp(DateTimeOffset(2026, 10, 14, 1, 2, 3, TimeSpan.Zero)), zoneless)

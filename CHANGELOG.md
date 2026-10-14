@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Original timestamp text: `YamlValue.ParseWithMetadata` (plus `TryParseWithMetadata` and `ParseMultipleWithMetadata`) returns a `YamlParsed` with the root value, the spans, and `TimestampText`, a map from JSON Pointer to the source text of each `Timestamp` (`2026-10-14` stays a date, a zoneless date-time stays zoneless). The `YamlValue` union and `Parse` are unchanged and still hold only the `DateTimeOffset`.
 - Source positions: `YamlValue.ParseWithPositions`, `TryParseWithPositions` and `ParseMultipleWithPositions` return a `Map<string, Span>` from RFC 6901 JSON Pointer (over the expanded tree) to the source span of every node, with new `Pos`, `Span` and `YamlParseError` types. Aliases and merged-in keys are positioned at the alias / `<<` site. `Parse` and its performance are unchanged; see `docs/reference.md`.
 
 ### Fixed
