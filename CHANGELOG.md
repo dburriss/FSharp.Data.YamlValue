@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-23
+
 ### Added
 
 - Fable support: the library compiles to JavaScript and Python from the same source (`#if FABLE_COMPILER` branches in a new internal `YamlPortable` module; the file/stream/URL loaders and `WriteTo(TextWriter)` are compiled out under Fable only). The shared test suite runs under Fable JS and Python via `scripts/fable-test.sh` (Fable 5.21.0 pinned in `.config/dotnet-tools.json`, generated runner in `scripts/fable-gen-runner.fsx`); see `docs/fable.md` for prerequisites and known differences. The .NET public API and behaviour are unchanged.
