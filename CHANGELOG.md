@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The package now ships its F# sources and project file under `fable/` so it can be consumed from Fable JS and Python with a plain `PackageReference`; 0.2.0 only worked via a project reference (consumers failed with "Fable packages must include F# sources"). The `lib/` DLLs and the .NET public API are unchanged.
+
 ## [0.2.0] - 2026-10-23
 
 ### Added

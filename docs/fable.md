@@ -11,6 +11,24 @@ The loaders that touch files, streams or the network, and `WriteTo(TextWriter, .
 `YamlValue.Load` (stream, reader, uri), `YamlValue.AsyncLoad`, `YamlDocument.Load` /
 `AsyncLoad`, and both `WriteTo` members. Parse from a string instead.
 
+## Using the NuGet package from Fable
+
+The package ships its F# sources and project file under `fable/` (in compile order, next to the
+`lib/` DLLs), which is what Fable compiles from. A plain package reference is enough:
+
+```xml
+<PackageReference Include="FSharp.Data.YamlValue" Version="0.2.1" />
+```
+
+```bash
+dotnet fable MyApp.fsproj --lang js
+dotnet fable MyApp.fsproj --lang python   # then: pip install fable-library==<your Fable version>
+```
+
+Versions before 0.2.1 had no `fable/` folder and only worked through a project reference.
+`open FSharp.Data.YamlExtensions` for `?` and the accessors. To get YAML text back, call
+`v.ToString(YamlSaveOptions.None)`: a bare `v.ToString()` is the compact structural print.
+
 ## Running the test suite under Fable
 
 ```bash

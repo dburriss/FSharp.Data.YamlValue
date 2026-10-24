@@ -15,7 +15,8 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>fsharp yaml parser serializer</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Fable support: the library compiles to JavaScript and Python from the same source (`#if FABLE_COMPILER` branches in a new internal `YamlPortable` module; the file/stream/URL loaders and `WriteTo(TextWriter)` are compiled out under Fable only). The shared test suite runs under Fable JS and Python via `scripts/fable-test.sh` (Fable 5.21.0 pinned in `.config/dotnet-tools.json`, generated runner in `scripts/fable-gen-runner.fsx`); see `docs/fable.md` for prerequisites and known differences. The .NET public API and behaviour are unchanged.
+    <PackageReleaseNotes>Fixed: the package now ships its F# sources and project file under `fable/` so it can be consumed from Fable JS and Python with a plain PackageReference; 0.2.0 only worked via a project reference. The lib/ DLLs and the .NET public API are unchanged. See `docs/fable.md`.
+Fable support: the library compiles to JavaScript and Python from the same source (`#if FABLE_COMPILER` branches in a new internal `YamlPortable` module; the file/stream/URL loaders and `WriteTo(TextWriter)` are compiled out under Fable only). The shared test suite runs under Fable JS and Python via `scripts/fable-test.sh` (Fable 5.21.0 pinned in `.config/dotnet-tools.json`, generated runner in `scripts/fable-gen-runner.fsx`); see `docs/fable.md` for prerequisites and known differences. The .NET public API and behaviour are unchanged.
 Original timestamp text: `YamlValue.ParseWithMetadata` (plus `TryParseWithMetadata` and `ParseMultipleWithMetadata`) returns a `YamlParsed` with the root value, the spans, and `TimestampText`, a map from JSON Pointer to the source text of each `Timestamp` (`2026-10-14` stays a date, a zoneless date-time stays zoneless). The `YamlValue` union and `Parse` are unchanged and still hold only the `DateTimeOffset`.
 Source positions: `YamlValue.ParseWithPositions`, `TryParseWithPositions` and `ParseMultipleWithPositions` return a `Map&lt;string, Span&gt;` from RFC 6901 JSON Pointer (over the expanded tree) to the source span of every node, with new `Pos`, `Span` and `YamlParseError` types. Aliases and merged-in keys are positioned at the alias / `&lt;&lt;` site. `Parse` and its performance are unchanged; see `docs/reference.md`.
 Portability fixes found by running under Fable: timestamps are built from components (Fable read `DateTimeOffset(DateTime, offset)` as local time, turning `07:08:09Z` into `05:08:09`), calendar-invalid timestamp-shaped text (`2024-02-30`, hour 25) is rejected up front, and `+5` parses under Fable. A huge exponent such as `1e999999` no longer builds a giant power of ten when deciding decimal-exactness. On .NET results are unchanged.
@@ -29,7 +30,7 @@ Double-quoted scalars now accept JSON-style UTF-16 surrogate-pair escapes (e.g. 
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="..\..\NUGET.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\..\NUGET.md" Pack="true" PackagePath="README.md" Condition="Exists('..\..\NUGET.md')" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="YamlValue.fs" />
@@ -42,5 +43,10 @@ Double-quoted scalars now accept JSON-style UTF-16 surrogate-pair escapes (e.g. 
     <Compile Include="YamlExtensions.fs" />
     <Compile Include="YamlBuilders.fs" />
     <Compile Include="AssemblyInfo.fs" />
+  </ItemGroup>
+  <!-- Fable compiles from source: ship every .fs plus this project file under fable/ -->
+  <ItemGroup>
+    <Content Include="*.fsproj" Pack="true" PackagePath="fable/" />
+    <Content Include="@(Compile)" Pack="true" PackagePath="fable/" />
   </ItemGroup>
 </Project>
